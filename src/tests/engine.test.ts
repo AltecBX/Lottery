@@ -180,4 +180,16 @@ describe('full engine', () => {
     expect(r.ok).toBe(false)
     expect(r.message).toMatch(/at least/)
   })
+
+  it('uses uniform signal weights when history is too short to backtest (12-30 draws)', () => {
+    const r = runEngine(sample.slice(0, 20), DEFAULT_SETTINGS)
+    expect(r.ok).toBe(true)
+    expect(r.backtest.evaluated).toBe(0)
+    // signals must actually contribute — an empty weight map would zero every
+    // score and rank numbers 1,2,3,... purely by the numeric tie-break
+    expect(r.top5.some((p) => p.score !== 0)).toBe(true)
+    expect(r.predictions[0].contributions.some((c) => c.contribution !== 0)).toBe(true)
+    expect(r.top5.map((p) => p.number)).not.toEqual([1, 2, 3, 4, 5])
+    for (const p of r.top10) expect(p.confidence).toBe('Low')
+  })
 })

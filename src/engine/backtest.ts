@@ -1,6 +1,6 @@
 import type { BacktestPoint, BacktestSummary, Draw, SignalPerformance } from './types.ts'
 import { HistoryState } from './state.ts'
-import { computeRawSignals, SIGNAL_LABEL, topIndices, zNormalize } from './signals.ts'
+import { computeRawSignals, SIGNAL_LABEL, SIGNAL_META, topIndices, zNormalize } from './signals.ts'
 
 export const MIN_HISTORY = 30
 
@@ -222,6 +222,15 @@ export function runBacktest(draws: Draw[], K: number, usePosition: boolean): Bac
     rankHitRate,
   }
 
-  const finalWeights = weights ?? {}
+  // With fewer than MIN_HISTORY draws the loop never evaluates, so no weights
+  // were learned — fall back to a uniform blend over the same signal set the
+  // live prediction will compute (never an empty map, which would zero out
+  // every signal and reduce the ranking to a numeric tie-break).
+  const finalWeights = weights ?? weightsFromSkills(
+    SIGNAL_META.map((m) => m.key).filter((k) => usePosition || k !== 'position'),
+    {},
+    0,
+    chance10,
+  )
   return { summary, weights: finalWeights, skills, rankHitRate }
 }
