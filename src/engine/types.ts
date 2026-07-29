@@ -1,0 +1,240 @@
+/** A single historical draw. */
+export interface Draw {
+  /** ISO date key, e.g. "2026-03-30" */
+  date: string
+  /** 0 = Sunday … 6 = Saturday (derived from date) */
+  dow: number
+  /** The five numbers in the order they appear in the source data */
+  numbers: number[]
+  /** The five numbers sorted ascending */
+  sorted: number[]
+}
+
+export interface Settings {
+  /** Highest number in the pool. 0 = auto-detect from data. */
+  poolMax: number
+  /** Optional override for the next draw date (ISO). Empty = auto from schedule. */
+  nextDate: string
+  /** Window size for the selectable-window frequency explorer (UI only). */
+  exploreWindow: number
+}
+
+export const DEFAULT_SETTINGS: Settings = {
+  poolMax: 0,
+  nextDate: '',
+  exploreWindow: 20,
+}
+
+/** One prediction signal's normalized scores plus bookkeeping. */
+export interface SignalResult {
+  key: string
+  /** z-normalized score per number (index 1..K; index 0 unused) */
+  z: Float64Array
+}
+
+export interface SignalMeta {
+  key: string
+  label: string
+  short: string
+  description: string
+}
+
+export interface NumberPrediction {
+  number: number
+  rank: number
+  /** Ensemble score (weighted sum of signal z-scores) */
+  score: number
+  /** Calibrated probability this number appears in the next draw (0..1) */
+  probability: number
+  /** Signal contributions, sorted by |contribution| descending */
+  contributions: { key: string; label: string; contribution: number; reason: string }[]
+  /** Human-readable supporting stats */
+  stats: NumberStats
+  confidence: 'High' | 'Medium' | 'Low'
+}
+
+export interface NumberStats {
+  number: number
+  count: number
+  overallRate: number
+  expectedRate: number
+  last20: number
+  drawsSinceSeen: number
+  meanGap: number
+  gapSd: number
+  dowCount: number
+  dowRate: number
+  dowDraws: number
+  streak: number
+  maxStreak: number
+  repeatRate: number
+  momentum: number
+  hotZ: number
+  overdueRatio: number
+}
+
+export interface ComboPrediction {
+  numbers: number[]
+  score: number
+  /** Relative likelihood index, best combo = 100 */
+  relative: number
+  avgProbability: number
+  pairLift: number
+  sumZ: number
+  notes: string[]
+}
+
+export interface SimilarSituation {
+  /** Index of the draw that FOLLOWED the similar context */
+  index: number
+  date: string
+  dow: number
+  similarity: number
+  /** The context draw (previous draw at that moment) */
+  contextNumbers: number[]
+  /** What actually came next */
+  outcome: number[]
+  /** Overlap between that outcome and the current top-10 prediction */
+  matchesWithPrediction: number[]
+}
+
+export interface BacktestPoint {
+  index: number
+  date: string
+  dow: number
+  hits5: number
+  hits10: number
+  baselineHits5: number
+  baselineHits10: number
+}
+
+export interface SignalPerformance {
+  key: string
+  label: string
+  short: string
+  description: string
+  /** Mean hits in that signal's top-10 across evaluated draws */
+  avgHits10: number
+  /** avgHits10 minus what pure chance yields */
+  skill: number
+  /** Learned ensemble weight (0..1, sums to 1) */
+  weight: number
+  evaluated: number
+}
+
+export interface BacktestSummary {
+  evaluated: number
+  minHistory: number
+  /** Chance expectation for hits in a random top-5 / top-10 */
+  chance5: number
+  chance10: number
+  ensemble5: number
+  ensemble10: number
+  baseline5: number
+  baseline10: number
+  /** Percent of evaluated draws where ensemble top-10 caught >= 2 of 5 */
+  ens10AtLeast2: number
+  points: BacktestPoint[]
+  byDow: { dow: number; draws: number; ensemble10: number; baseline10: number }[]
+  signals: SignalPerformance[]
+  /** Empirical hit-rate by predicted rank (calibrated, monotone) */
+  rankHitRate: number[]
+}
+
+export interface HotColdEntry {
+  number: number
+  count20: number
+  expected20: number
+  z: number
+}
+
+export interface OverdueEntry {
+  number: number
+  drawsSinceSeen: number
+  meanGap: number
+  ratio: number
+}
+
+export interface PairEntry {
+  a: number
+  b: number
+  count: number
+  expected: number
+  lift: number
+}
+
+export interface FollowerEntry {
+  from: number
+  to: number
+  count: number
+  opportunities: number
+  rate: number
+  lift: number
+}
+
+export interface DowProfile {
+  dow: number
+  draws: number
+  top: { number: number; count: number; rate: number; lift: number }[]
+}
+
+export interface TrendEntry {
+  number: number
+  rate10: number
+  rate50: number
+  momentum: number
+}
+
+export interface StreakEntry {
+  number: number
+  streak: number
+}
+
+export interface PositionProfile {
+  position: number
+  min: number
+  p25: number
+  median: number
+  p75: number
+  max: number
+  histogram: number[]
+}
+
+export interface EngineResult {
+  ok: boolean
+  message?: string
+  K: number
+  drawCount: number
+  firstDate: string
+  lastDate: string
+  scheduleDows: number[]
+  nextDate: string
+  nextDow: number
+  /** Whether source rows appear pre-sorted (positions are ranks, not draw order) */
+  inputSorted: boolean
+
+  predictions: NumberPrediction[]
+  top5: NumberPrediction[]
+  top10: NumberPrediction[]
+  bestCombo: ComboPrediction | null
+  altCombos: ComboPrediction[]
+
+  hot: HotColdEntry[]
+  cold: HotColdEntry[]
+  overdue: OverdueEntry[]
+  pairs: PairEntry[]
+  followers: FollowerEntry[]
+  dowProfiles: DowProfile[]
+  rising: TrendEntry[]
+  falling: TrendEntry[]
+  streaks: StreakEntry[]
+  positions: PositionProfile[]
+  similar: SimilarSituation[]
+
+  frequency: { number: number; count: number }[]
+  /** frequency inside the user-selected explore window */
+  windowFrequency: { number: number; count: number }[]
+
+  backtest: BacktestSummary
+  computeMs: number
+}
