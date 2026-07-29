@@ -31,9 +31,23 @@ export function useEngine(draws: Draw[], settings: Settings): { result: EngineRe
         setResult(e.data.result)
         setComputing(false)
       }
+      // If the worker script can't load (e.g. the app is opened from file:// or a
+      // restrictive host), fall back to computing on the main thread.
+      const onError = () => {
+        worker.removeEventListener('message', onMessage)
+        worker.terminate()
+        workerRef.current = null
+        if (seq !== seqRef.current) return
+        setResult(runEngine(draws, settings))
+        setComputing(false)
+      }
       worker.addEventListener('message', onMessage)
+      worker.addEventListener('error', onError)
       worker.postMessage({ seq, draws, settings })
-      return () => worker.removeEventListener('message', onMessage)
+      return () => {
+        worker.removeEventListener('message', onMessage)
+        worker.removeEventListener('error', onError)
+      }
     }
 
     // Fallback: compute on the main thread (deferred a tick to let the UI paint)

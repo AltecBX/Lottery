@@ -7,18 +7,30 @@ prediction explained, probability-calibrated, and honestly stress-tested by a wa
 Built with React + TypeScript + Vite. All computation runs in your browser (in a Web Worker); your data never
 leaves the machine and persists in `localStorage`.
 
-## Quick start
+## Running the app
+
+**Easiest — use it as a website (no install).** This repo ships a GitHub Actions workflow that publishes the
+app to GitHub Pages on every push to `main`. One-time setup: in the GitHub repo go to **Settings → Pages** and
+set **Source** to **GitHub Actions**. After the next push to `main`, the app is live at
+`https://<your-username>.github.io/Lottery/` — bookmark it on any device. Your draw data is stored in that
+browser's `localStorage`, so it's there every time you come back (per device/browser).
+
+**Run locally (for development).** Install [Node.js LTS](https://nodejs.org), then:
 
 ```bash
 npm install
-npm run dev        # development server
+npm run dev        # development server → http://localhost:5173
 npm run build      # production build (output in dist/)
 npm run preview    # serve the production build
 npm test           # engine test suite (16 tests, incl. leakage guard)
 ```
 
-Open the app, then either **Import** a CSV/Excel file of past results or click **Explore with sample data**
-(715 synthetic draws with deliberately planted patterns, so you can watch the engine find them).
+The `dist/` folder produced by `npm run build` is plain static files — it can be hosted on any static host
+(Netlify, Vercel, an S3 bucket, a shared drive with a web server) with zero configuration.
+
+Once the app is open, either **Import** a CSV/Excel file of past results or click **Explore with sample data**
+(715 synthetic draws with deliberately planted patterns, so you can watch the engine find them). After each real
+draw, click **+ Add result** — the model retrains instantly.
 
 ## Data format
 
