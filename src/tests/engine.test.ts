@@ -5,6 +5,8 @@ import { HistoryState } from '../engine/state.ts'
 import { isotonicDecreasing, runBacktest } from '../engine/backtest.ts'
 import { runEngine } from '../engine/engine.ts'
 import { generateSampleDraws } from '../engine/sample.ts'
+import { choose, hitDistribution, jackpotOdds, matchOdds } from '../engine/odds.ts'
+import { parseSocrataRows } from '../engine/sync.ts'
 import { DEFAULT_SETTINGS } from '../engine/types.ts'
 import type { Draw } from '../engine/types.ts'
 
@@ -257,6 +259,39 @@ describe('bonus-ball model', () => {
     for (let i = 0; i < a.backtest.points.length - 1; i++) {
       expect(a.backtest.points[i]).toEqual(b.backtest.points[i])
     }
+  })
+})
+
+describe('odds math', () => {
+  it('reproduces the published Powerball odds', () => {
+    expect(choose(69, 5)).toBe(11238513)
+    expect(jackpotOdds(69, 5, 26)).toBe(292201338)
+    expect(Math.round(matchOdds(69, 5, 5))).toBe(11238513)
+    const dist = hitDistribution(69, 5, 5)
+    expect(dist.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 10)
+    // catching zero is the most likely outcome for any 5-of-69 pick
+    expect(dist[0]).toBeGreaterThan(0.6)
+    expect(dist[1]).toBeGreaterThan(0.2)
+  })
+})
+
+describe('official results sync parsing', () => {
+  it('maps Powerball Socrata rows (mains + PB in one field)', () => {
+    const out = parseSocrataRows([
+      { draw_date: '2026-07-29T00:00:00.000', winning_numbers: '30 36 40 42 57 02' },
+      { draw_date: '2026-07-25T00:00:00.000', winning_numbers: '03 04 24 36 47 17' },
+      { draw_date: 'bad', winning_numbers: '1 2 3 4 5 6' },
+    ], 'powerball')
+    expect(out.draws).toHaveLength(2)
+    expect(out.hasSpecial).toBe(true)
+    expect(out.draws[1]).toMatchObject({ date: '2026-07-29', sorted: [30, 36, 40, 42, 57], special: 2, dow: 3 })
+  })
+  it('maps Mega Millions rows (mega_ball separate)', () => {
+    const out = parseSocrataRows([
+      { draw_date: '2026-07-28T00:00:00.000', winning_numbers: '10 20 30 40 50', mega_ball: '7' },
+    ], 'megamillions')
+    expect(out.draws).toHaveLength(1)
+    expect(out.draws[0]).toMatchObject({ sorted: [10, 20, 30, 40, 50], special: 7 })
   })
 })
 

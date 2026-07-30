@@ -20,13 +20,17 @@ export function PredictionPanel({ res }: { res: EngineResult }) {
 
       <div className="hero-cols">
         <div className="hero-balls">
-          {res.topPick.map((p) => (
-            <div className="hero-ball-wrap" key={p.number}>
-              <Ball n={p.number} size="hero" />
-              <span className="prob">{fmtPct(p.probability)}</span>
-              <span className="conf">{p.confidence}</span>
-            </div>
-          ))}
+          {res.topPick.map((p) => {
+            const chance = res.drawSize / res.K
+            const e = chance > 0 ? p.probability / chance - 1 : 0
+            return (
+              <div className="hero-ball-wrap" key={p.number}>
+                <Ball n={p.number} size="hero" />
+                <span className="prob">{fmtPct(p.probability)}</span>
+                <span className="conf">{Math.abs(e) < 0.03 ? '\u2248 chance' : `${e > 0 ? '+' : '\u2212'}${Math.round(Math.abs(e) * 100)}% vs chance`}</span>
+              </div>
+            )
+          })}
           {res.special && res.special.picks.length > 0 && (
             <div className="hero-ball-wrap" key="special">
               <Ball n={res.special.picks[0].number} size="hero" variant="special" />

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Draw, Settings } from '../engine/types.ts'
 import { parseDelimitedText, rowsToDraws, type ParseOutcome } from '../engine/parse.ts'
+import { fetchOfficialResults, SYNC_SOURCES, type SyncKey } from '../engine/sync.ts'
 import { dowOf, DOW_NAMES, formatDate } from '../engine/dates.ts'
 
 function Dialog({ open, onClose, title, children, footer }: {
@@ -76,6 +77,25 @@ export function ImportDialog({ open, onClose, hasExisting, expectedSize, bonusMo
     setOutcome(parseDelimitedText(pasted, expectedSize, bonusMode))
   }
 
+  const handleSync = async (key: SyncKey) => {
+    const label = SYNC_SOURCES.find((s) => s.key === key)?.label ?? key
+    setBusy(true)
+    setFileName(`official ${label} history (data.ny.gov)`)
+    try {
+      setOutcome(await fetchOfficialResults(key))
+    } catch (err) {
+      setOutcome({
+        draws: [],
+        errors: [`Could not reach the official results source: ${err instanceof Error ? err.message : String(err)}. Check your connection and try again.`],
+        warnings: [],
+        drawSize: 0,
+        hasSpecial: false,
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const good = outcome && outcome.draws.length > 0
 
   return (
@@ -123,6 +143,20 @@ export function ImportDialog({ open, onClose, hasExisting, expectedSize, bonusMo
         />
       </div>
 
+      <div className="field">
+        <label>No file needed — sync the official history</label>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {SYNC_SOURCES.map((s) => (
+            <button key={s.key} className="btn sm" disabled={busy} onClick={() => void handleSync(s.key)}>
+              ⟳ {s.label}
+            </button>
+          ))}
+        </div>
+        <span className="help">
+          Pulls every draw (numbers + bonus ball) from New York State's public open-data service, the API of record.
+          Re-sync any time to append the newest results. Nothing about you is uploaded anywhere.
+        </span>
+      </div>
       <div className="field">
         <label>Or paste rows</label>
         <textarea

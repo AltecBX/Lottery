@@ -1,0 +1,13 @@
+{
+  "name": "Pattern Lab — Number Prediction Laboratory",
+  "short_name": "Pattern Lab",
+  "description": "A transparent statistical laboratory for lottery draw histories: honest analysis, self-testing predictions, and calibrated probabilities.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f9f9f7",
+  "theme_color": "#2a78d6",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

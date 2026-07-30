@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react'
 import type { EngineResult } from '../engine/types.ts'
 import { SIGNAL_LABEL } from '../engine/signals.ts'
-import { SectionCard, Ball, fmtPct } from './shared.tsx'
+import { SectionCard, Ball, EdgeChip, fmtPct } from './shared.tsx'
 
 export function RankingTable({ res }: { res: EngineResult }) {
   const [expanded, setExpanded] = useState<number | null>(null)
@@ -30,7 +30,7 @@ export function RankingTable({ res }: { res: EngineResult }) {
               <th style={{ width: 60 }}>Number</th>
               <th>Score</th>
               <th className="num">Est. probability</th>
-              <th>Confidence</th>
+              <th>Edge</th>
               <th>Main reason</th>
             </tr>
           </thead>
@@ -54,7 +54,7 @@ export function RankingTable({ res }: { res: EngineResult }) {
                       </div>
                     </td>
                     <td className="num" style={{ fontWeight: 640 }}>{fmtPct(p.probability)}</td>
-                    <td><span className={`conf-badge ${p.confidence}`}>{p.confidence}</span></td>
+                    <td><EdgeChip probability={p.probability} chance={res.drawSize / res.K} /></td>
                     <td style={{ color: 'var(--ink-2)', fontSize: 13 }}>{top?.reason ?? '—'}</td>
                   </tr>
                   {expanded === p.number && (

@@ -16,12 +16,18 @@ import { SimilarPanel } from './components/SimilarPanel.tsx'
 import { BacktestPanel } from './components/BacktestPanel.tsx'
 import { HistoryTable } from './components/HistoryTable.tsx'
 import { PredictionLog } from './components/PredictionLog.tsx'
+import { RealityPanel } from './components/RealityPanel.tsx'
+import { InspectorPanel } from './components/InspectorPanel.tsx'
+import { TicketLab } from './components/TicketLab.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 
 const NAV = [
   ['prediction', 'Prediction'],
   ['ranking', 'Ranking'],
   ['log', 'Prediction log'],
+  ['reality', 'Reality check'],
+  ['ticket', 'Ticket lab'],
+  ['inspector', 'Inspector'],
   ['hotcold', 'Hot / Cold'],
   ['dow', 'Weekdays'],
   ['pairs', 'Pairs'],
@@ -104,7 +110,13 @@ export default function App() {
         <div className="container">
           <div className="header-row">
             <div className="brand">
-              <span className="brand-mark">5</span>
+              <span className="brand-mark" aria-hidden="true">
+                <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+                  <circle cx="15" cy="15" r="13" fill="var(--accent)" />
+                  <circle cx="10.5" cy="10.5" r="4.5" fill="rgba(255,255,255,0.28)" />
+                  <circle cx="26" cy="25.5" r="8.5" fill="var(--hot)" stroke="var(--page)" strokeWidth="2.5" />
+                </svg>
+              </span>
               <div>
                 <h1>Pattern Lab</h1>
                 <span className="sub">number prediction laboratory</span>
@@ -176,8 +188,11 @@ export default function App() {
                 </div>
               )}
               <PredictionPanel res={result} />
+              <RealityPanel res={result} />
               <RankingTable res={result} />
               <PredictionLog res={result} />
+              <TicketLab key={`t${result.lastDate}-${result.drawCount}`} res={result} draws={draws} />
+              <InspectorPanel res={result} draws={draws} />
               <HotColdOverdue res={result} />
               <DowPanel res={result} />
               <PairsPanel res={result} />
@@ -205,10 +220,11 @@ export default function App() {
       <footer className="footer">
         <div className="container">
           <p>
-            Pattern Lab finds and honestly weighs historical patterns — the backtest panel shows exactly how much (or how
-            little) each signal beats chance in your data. Fair lottery draws are random by design: past results can't
-            guarantee future ones, so treat predictions as analysis, not certainty. Data stays in your browser
-            (localStorage); nothing is uploaded.
+            Pattern Lab finds and honestly weighs historical patterns — the Reality check and Backtest panels show exactly
+            how much (or how little) any signal beats chance in your data. Fair lottery draws are random by design: no
+            analysis can predict them, and every prediction here is entertainment and statistics, never something to rely
+            on. Play only with money you can comfortably lose. If gambling stops feeling like fun, free confidential help
+            is available: call or text 1-800-GAMBLER (US). Your data stays in your browser; nothing about you is uploaded.
           </p>
         </div>
       </footer>
