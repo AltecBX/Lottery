@@ -1,6 +1,6 @@
 import type { BacktestPoint, BacktestSummary, Draw, SignalPerformance } from './types.ts'
 import { HistoryState } from './state.ts'
-import { computeRawSignals, SIGNAL_LABEL, signalKeys, topIndices, zNormalize } from './signals.ts'
+import { computeRawSignals, computeSpecialRawSignals, SIGNAL_LABEL, signalKeys, SPECIAL_SIGNAL_KEYS, topIndices, zNormalize } from './signals.ts'
 
 export const MIN_HISTORY = 30
 
@@ -10,6 +10,10 @@ export interface BacktestOutput {
   weights: Record<string, number>
   /** Calibrated P(hit) for each predicted rank 1..K */
   rankHitRate: number[]
+  /** Bonus-ball learned weights (when the game has one) */
+  specialWeights: Record<string, number> | null
+  /** Bonus-ball calibrated P(hit) by predicted rank */
+  specialRankHitRate: number[] | null
 }
 
 /**
@@ -73,7 +77,7 @@ export function isotonicDecreasing(rates: number[], weights: number[]): number[]
   return out
 }
 
-export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosition: boolean): BacktestOutput {
+export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosition: boolean, specialKs = 0): BacktestOutput {
   const N = draws.length
   const D = drawSize
   const state = new HistoryState(K, D)
@@ -100,6 +104,23 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
     for (const k of keysAll) {
       const lifetime = (evalCount[k] ?? 0) > 0 ? sumHits10[k] / evalCount[k] - chance10 : 0
       out[k] = Math.min(emaG[k] ?? 0, lifetime)
+    }
+    return out
+  }
+
+  // Bonus-ball learner state (only used when specialKs > 0)
+  const sEma: Record<string, number> = {}
+  const sSum: Record<string, number> = {}
+  const sCount: Record<string, number> = {}
+  const sChance3 = specialKs > 0 ? Math.min(3, specialKs) / specialKs : 0
+  const sHitsAtRank = new Uint32Array(Math.max(1, specialKs + 1))
+  let sEvaluated = 0, sTop1 = 0, sTop3 = 0
+  const sEmaLambda = Math.pow(0.5, 1 / 80)
+  const sSkillUsed = (): Record<string, number> => {
+    const out: Record<string, number> = {}
+    for (const k of SPECIAL_SIGNAL_KEYS) {
+      const lifetime = (sCount[k] ?? 0) > 0 ? sSum[k] / sCount[k] - sChance3 : 0
+      out[k] = Math.min(sEma[k] ?? 0, lifetime)
     }
     return out
   }
@@ -165,7 +186,7 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
       dowAgg[target.dow].draws++
       dowAgg[target.dow].ens10 += h10
       dowAgg[target.dow].base10 += b10
-      points.push({
+      const point: BacktestPoint = {
         index: t,
         date: target.date,
         dow: target.dow,
@@ -175,7 +196,42 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
         baselineHits10: b10,
         predictedTop: order.slice(0, Math.min(10, K)),
         actual: [...target.sorted],
-      })
+      }
+
+      // Bonus-ball self-test (own pool, own learned weights)
+      if (specialKs > 0 && target.special !== undefined && target.special >= 1 && target.special <= specialKs) {
+        const sRaws = computeSpecialRawSignals(state, target.dow, specialKs)
+        const sZs = sRaws.map((r) => zNormalize(r.raw, specialKs))
+        const sKeys = sRaws.map((r) => r.key)
+        const sSigHits: Record<string, number> = {}
+        for (let i = 0; i < sKeys.length; i++) {
+          const top3 = topIndices(sZs[i], specialKs, Math.min(3, specialKs))
+          sSigHits[sKeys[i]] = top3.includes(target.special) ? 1 : 0
+        }
+        const sWeights = weightsFromSkills(sKeys, sSkillUsed(), sEvaluated, sChance3)
+        const sEns = new Float64Array(specialKs + 1)
+        for (let i = 0; i < sKeys.length; i++) {
+          const w = sWeights[sKeys[i]] ?? 0
+          if (w <= 0) continue
+          for (let v = 1; v <= specialKs; v++) sEns[v] += w * sZs[i][v]
+        }
+        const sOrder = topIndices(sEns, specialKs, specialKs)
+        const rank = sOrder.indexOf(target.special)
+        if (rank >= 0) sHitsAtRank[rank + 1]++
+        if (rank === 0) sTop1++
+        if (rank >= 0 && rank < 3) sTop3++
+        sEvaluated++
+        point.specialTop = sOrder.slice(0, Math.min(3, specialKs))
+        point.specialActual = target.special
+        for (const k of sKeys) {
+          const excess = sSigHits[k] - sChance3
+          sEma[k] = sEma[k] === undefined ? excess : sEmaLambda * sEma[k] + (1 - sEmaLambda) * excess
+          sSum[k] = (sSum[k] ?? 0) + sSigHits[k]
+          sCount[k] = (sCount[k] ?? 0) + 1
+        }
+      }
+
+      points.push(point)
 
       // Update skill state AFTER evaluating (this draw informs future weights only)
       for (const k of keys) {
@@ -199,6 +255,21 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
   const rankHitRate = evaluated > 0 ? isotonicDecreasing(rates, rateW) : Array.from({ length: K }, () => D / K)
 
   const finalWeights = weightsFromSkills(keysAll, skillUsed(), evaluated, chance10)
+
+  // Bonus-ball final weights + rank calibration
+  let specialWeights: Record<string, number> | null = null
+  let specialRankHitRate: number[] | null = null
+  if (specialKs > 0) {
+    specialWeights = weightsFromSkills([...SPECIAL_SIGNAL_KEYS], sSkillUsed(), sEvaluated, sChance3)
+    const Ms = 25
+    const sRates: number[] = []
+    const sW: number[] = []
+    for (let r = 1; r <= specialKs; r++) {
+      sRates.push((sHitsAtRank[r] + Ms * (1 / specialKs)) / (sEvaluated + Ms))
+      sW.push(1)
+    }
+    specialRankHitRate = sEvaluated > 0 ? isotonicDecreasing(sRates, sW) : Array.from({ length: specialKs }, () => 1 / specialKs)
+  }
 
   const signals: SignalPerformance[] = keysAll
     .filter((k) => (evalCount[k] ?? 0) > 0 || evaluated === 0)
@@ -239,7 +310,18 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
       .filter((d) => d.draws > 0),
     signals,
     rankHitRate,
+    ...(specialKs > 0
+      ? {
+          special: {
+            evaluated: sEvaluated,
+            top1: sEvaluated ? sTop1 / sEvaluated : 0,
+            top3: sEvaluated ? sTop3 / sEvaluated : 0,
+            chance1: 1 / specialKs,
+            chance3: sChance3,
+          },
+        }
+      : {}),
   }
 
-  return { summary, weights: finalWeights, rankHitRate }
+  return { summary, weights: finalWeights, rankHitRate, specialWeights, specialRankHitRate }
 }

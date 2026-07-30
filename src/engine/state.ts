@@ -65,6 +65,18 @@ export class HistoryState {
   drawSums: number[] = []
   readonly maskWords: number
 
+  /** Bonus/special ball tracking (own pool, up to 99) */
+  sCounts = new Uint32Array(100)
+  sByDow = new Uint32Array(7 * 100)
+  sEwma = new Float64Array(100)
+  sLastSeen = new Int32Array(100).fill(-1)
+  sGapSum = new Float64Array(100)
+  sGapN = new Uint32Array(100)
+  sTrans = new Uint32Array(100 * 100) // prev special -> next special
+  sPrev = 0 // previous draw's special (0 = none)
+  sN = 0 // draws with a special ball
+  readonly sLambda = Math.pow(0.5, 1 / 25)
+
   constructor(K: number, drawSize: number) {
     this.K = K
     this.D = drawSize
@@ -226,9 +238,35 @@ export class HistoryState {
     this.masks.push(mask)
     this.drawSums.push(sum)
 
+    // Bonus/special ball
+    if (draw.special !== undefined && draw.special >= 1 && draw.special < 100) {
+      const sp = draw.special
+      for (let v = 1; v < 100; v++) this.sEwma[v] *= this.sLambda
+      this.sEwma[sp] += 1 - this.sLambda
+      this.sCounts[sp]++
+      this.sByDow[draw.dow * 100 + sp]++
+      if (this.sLastSeen[sp] >= 0) {
+        this.sGapSum[sp] += this.sN - this.sLastSeen[sp]
+        this.sGapN[sp]++
+      }
+      this.sLastSeen[sp] = this.sN
+      if (this.sPrev > 0) this.sTrans[this.sPrev * 100 + sp]++
+      this.sPrev = sp
+      this.sN++
+    }
+
     this.drawsByDow[draw.dow]++
     this.history.push(draw)
     this.n++
+  }
+
+  /** Draws-with-special elapsed since the special value last appeared. */
+  sDrawsSince(v: number): number {
+    return this.sLastSeen[v] < 0 ? this.sN : this.sN - this.sLastSeen[v]
+  }
+
+  sMeanGap(v: number, Ks: number): number {
+    return this.sGapN[v] > 0 ? this.sGapSum[v] / this.sGapN[v] : Ks
   }
 
   sumMean(): number { return this.n ? this.sumSum / this.n : 0 }

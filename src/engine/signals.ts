@@ -313,6 +313,45 @@ export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePo
   return out
 }
 
+export const SPECIAL_SIGNAL_KEYS = ['sFreq', 'sRecency', 'sDow', 'sOverdue', 'sFollower'] as const
+
+/**
+ * Signals for the bonus/special ball, computed over its own pool 1..Ks.
+ * Uses only data already inside `state` — same leak-free guarantee as the mains.
+ */
+export function computeSpecialRawSignals(state: HistoryState, targetDow: number, Ks: number): RawSignal[] {
+  const out: RawSignal[] = []
+  const n = state.sN
+  const freq = new Float64Array(Ks + 1)
+  const rec = new Float64Array(Ks + 1)
+  const dowF = new Float64Array(Ks + 1)
+  const over = new Float64Array(Ks + 1)
+  const fol = new Float64Array(Ks + 1)
+  const nDow = (() => {
+    let acc = 0
+    for (let v = 1; v <= Ks; v++) acc += state.sByDow[targetDow * 100 + v]
+    return acc
+  })()
+  let prevTotal = 0
+  if (state.sPrev > 0) {
+    for (let v = 1; v <= Ks; v++) prevTotal += state.sTrans[state.sPrev * 100 + v]
+  }
+  for (let v = 1; v <= Ks; v++) {
+    const base = (state.sCounts[v] + 10 / Ks) / (n + 10)
+    freq[v] = base
+    rec[v] = state.sEwma[v]
+    dowF[v] = (state.sByDow[targetDow * 100 + v] + 12 * base) / (nDow + 12)
+    over[v] = Math.min(3, state.sDrawsSince(v) / Math.max(1, state.sMeanGap(v, Ks)))
+    fol[v] = state.sPrev > 0 ? (state.sTrans[state.sPrev * 100 + v] + 8 * base) / (prevTotal + 8) : base
+  }
+  out.push({ key: 'sFreq', raw: freq })
+  out.push({ key: 'sRecency', raw: rec })
+  out.push({ key: 'sDow', raw: dowF })
+  out.push({ key: 'sOverdue', raw: over })
+  out.push({ key: 'sFollower', raw: fol })
+  return out
+}
+
 /** Indices of the m largest values in arr (1..K), descending. */
 export function topIndices(arr: Float64Array, K: number, m: number): number[] {
   const idx: number[] = []

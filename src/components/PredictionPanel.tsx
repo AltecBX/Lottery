@@ -27,6 +27,13 @@ export function PredictionPanel({ res }: { res: EngineResult }) {
               <span className="conf">{p.confidence}</span>
             </div>
           ))}
+          {res.special && res.special.picks.length > 0 && (
+            <div className="hero-ball-wrap" key="special">
+              <Ball n={res.special.picks[0].number} size="hero" variant="special" />
+              <span className="prob">{fmtPct(res.special.picks[0].probability)}</span>
+              <span className="special-label">Bonus ball</span>
+            </div>
+          )}
         </div>
         <div className="hero-drivers">
           <div className="mini-title">What's driving the model</div>
@@ -57,8 +64,28 @@ export function PredictionPanel({ res }: { res: EngineResult }) {
             {res.bestCombo.numbers.map((n) => (
               <Ball key={n} n={n} size="sm" variant="pick" />
             ))}
+            {res.special && res.special.picks.length > 0 && (
+              <Ball n={res.special.picks[0].number} size="sm" variant="special" />
+            )}
           </span>
           <span className="combo-note">{res.bestCombo.notes.join(' · ')}</span>
+        </div>
+      )}
+
+      {res.special && (
+        <div className="combo-strip">
+          <span className="mini-title" style={{ margin: 0 }}>Bonus ball</span>
+          <span className="balls">
+            {res.special.picks.map((s, i) => (
+              <Ball key={s.number} n={s.number} size="sm" variant={i === 0 ? 'special' : ''} title={`drawn ${s.count}× · last seen ${s.drawsSinceSeen} draws ago`} />
+            ))}
+          </span>
+          <span className="combo-note">
+            pool 1–{res.special.K} · candidates ranked by its own learned model
+            {bt.special && bt.special.evaluated > 0 && (
+              <> · backtest: in top-3 {fmtPct(bt.special.top3, 0)} of the time (chance {fmtPct(bt.special.chance3, 0)})</>
+            )}
+          </span>
         </div>
       )}
 

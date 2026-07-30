@@ -13,6 +13,7 @@ export function PredictionLog({ res }: { res: EngineResult }) {
   const [page, setPage] = useState(0)
   const D = res.drawSize
   const all = [...res.backtest.points].reverse() // newest first
+  const hasSpecial = all.some((p) => p.specialActual !== undefined)
   const pages = Math.max(1, Math.ceil(all.length / PAGE))
   const cur = Math.min(page, pages - 1)
   const rows = all.slice(cur * PAGE, cur * PAGE + PAGE)
@@ -31,6 +32,7 @@ export function PredictionLog({ res }: { res: EngineResult }) {
               <th>Draw</th>
               <th>Model's top-10 before the draw</th>
               <th>Actual result</th>
+              {hasSpecial && <th>Bonus</th>}
               <th className="num">Hits</th>
             </tr>
           </thead>
@@ -58,6 +60,22 @@ export function PredictionLog({ res }: { res: EngineResult }) {
                       ))}
                     </span>
                   </td>
+                  {hasSpecial && (
+                    <td>
+                      {p.specialActual !== undefined ? (
+                        <span className="pair-cell" style={{ gap: 4 }} title={p.specialTop ? `model's top-3: ${p.specialTop.join(', ')}` : undefined}>
+                          <Ball
+                            n={p.specialActual}
+                            size="sm"
+                            variant={p.specialTop?.includes(p.specialActual) ? 'special' : 'faded'}
+                            title={p.specialTop?.includes(p.specialActual) ? 'was in the model\'s top-3' : 'missed'}
+                          />
+                        </span>
+                      ) : (
+                        <span className="hint">—</span>
+                      )}
+                    </td>
+                  )}
                   <td className="num" style={{ fontWeight: 680, color: p.hits10 >= 2 ? 'var(--good-text)' : p.hits10 === 0 ? 'var(--muted)' : undefined }}>
                     {p.hits10}/{D}
                   </td>
@@ -65,7 +83,7 @@ export function PredictionLog({ res }: { res: EngineResult }) {
               )
             })}
             {rows.length === 0 && (
-              <tr><td colSpan={4} style={{ color: 'var(--muted)' }}>Not enough history yet — the self-test starts once {res.backtest.minHistory} draws are loaded.</td></tr>
+              <tr><td colSpan={hasSpecial ? 5 : 4} style={{ color: 'var(--muted)' }}>Not enough history yet — the self-test starts once {res.backtest.minHistory} draws are loaded.</td></tr>
             )}
           </tbody>
         </table>

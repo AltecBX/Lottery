@@ -51,6 +51,18 @@ export default function App() {
 
   const detectedSize = useMemo(() => (draws.length > 0 ? draws[draws.length - 1].sorted.length : 0), [draws])
 
+  const detectedSpecialMax = useMemo(() => {
+    let m = 0
+    for (const d of draws) if (d.special !== undefined) m = Math.max(m, d.special)
+    return m
+  }, [draws])
+
+  const trimToCurrentEra = useCallback((cutoffDate: string, affected: number) => {
+    if (!window.confirm(`Remove the ${affected.toLocaleString()} draws from before ${cutoffDate} (the old number pool)? Export a CSV first if you want a backup.`)) return
+    setDraws((prev) => prev.filter((d) => d.date >= cutoffDate))
+    say('Trimmed to the current era — model retrained on the modern pool only.')
+  }, [setDraws])
+
   const say = (msg: string) => {
     setFlash(msg)
     window.setTimeout(() => setFlash(''), 4200)
@@ -150,6 +162,19 @@ export default function App() {
 
           {hasData && result?.ok && (
             <div className={`grid ${computing ? 'stale' : ''}`}>
+              {result.eraNotice && (
+                <div className="notice warn era-banner">
+                  <div className="grow">
+                    <strong>Rule change detected:</strong> early draws only reach {result.eraNotice.earlyMax}, but recent ones reach{' '}
+                    {result.eraNotice.currentMax} — the game's number pool changed over your history. The{' '}
+                    {result.eraNotice.affected.toLocaleString()} old-pool draws bias every frequency stat (that's usually what an
+                    inflated "model edge" is). Recommended: keep only draws from {result.eraNotice.cutoffDate} on.
+                  </div>
+                  <button className="btn primary" onClick={() => trimToCurrentEra(result.eraNotice!.cutoffDate, result.eraNotice!.affected)}>
+                    Trim to current era
+                  </button>
+                </div>
+              )}
               <PredictionPanel res={result} />
               <RankingTable res={result} />
               <PredictionLog res={result} />
@@ -200,6 +225,7 @@ export default function App() {
         onClose={() => setDialog('')}
         hasExisting={hasData}
         expectedSize={settings.drawSize}
+        bonusMode={settings.bonus}
         onImport={handleImport}
       />
       <AddResultDialog
@@ -208,6 +234,8 @@ export default function App() {
         defaultDate={result?.ok ? result.nextDate : ''}
         poolMax={settings.poolMax > 0 ? settings.poolMax : result?.ok ? result.K : 0}
         drawSize={result?.ok ? result.drawSize : detectedSize}
+        hasSpecial={result?.ok ? result.special !== null : detectedSpecialMax > 0}
+        specialMax={settings.specialMax > 0 ? settings.specialMax : detectedSpecialMax}
         existingDates={existingDates}
         onAdd={handleAdd}
       />
@@ -217,6 +245,7 @@ export default function App() {
         settings={settings}
         detectedPool={detectedPool}
         detectedSize={detectedSize}
+        detectedSpecialMax={detectedSpecialMax}
         onSave={(s) => { setSettings(s); setDialog('') }}
         onClearAll={() => { setDraws([]); setSettings(DEFAULT_SETTINGS); setDialog('') }}
       />

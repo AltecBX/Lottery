@@ -1,9 +1,9 @@
-import type { DriverEntry, Draw, EngineResult, Settings, SimilarSituation } from './types.ts'
+import type { DriverEntry, Draw, EngineResult, Settings, SimilarSituation, SpecialResult } from './types.ts'
 import { HistoryState } from './state.ts'
 import { runBacktest, MIN_HISTORY } from './backtest.ts'
 import { predictNext } from './predict.ts'
 import { buildCombos } from './combos.ts'
-import { similarityScores, SIGNAL_LABEL } from './signals.ts'
+import { computeSpecialRawSignals, similarityScores, SIGNAL_LABEL, zNormalize } from './signals.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
   topFollowers, topPairs, trends, windowCounts,
@@ -18,7 +18,7 @@ function emptyResult(message: string): EngineResult {
     ok: false, message, K: 0, drawSize: 0, drawCount: 0, firstDate: '', lastDate: '',
     scheduleDows: [], nextDate: '', nextDow: 0, inputSorted: true,
     predictions: [], topPick: [], top10: [], bestCombo: null, altCombos: [],
-    drivers: [], weightsLearned: false,
+    drivers: [], weightsLearned: false, special: null, eraNotice: null,
     hot: [], cold: [], overdue: [], pairs: [], followers: [], dowProfiles: [],
     rising: [], falling: [], streaks: [], positions: [], similar: [],
     frequency: [], windowFrequency: [],
@@ -85,8 +85,35 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
   const inputSorted = draws.every((d) => d.numbers.every((v, idx) => idx === 0 || v >= d.numbers[idx - 1]))
   const usePosition = !inputSorted
 
+  // Bonus/special ball: model it when (nearly) every draw carries one
+  const withSpecial = draws.filter((d) => d.special !== undefined && d.special >= 1)
+  let specialKs = 0
+  if (withSpecial.length >= draws.length * 0.9 && withSpecial.length >= MIN_DRAWS) {
+    let maxS = 0
+    for (const d of withSpecial) maxS = Math.max(maxS, d.special!)
+    specialKs = settings.specialMax > 0 ? settings.specialMax : maxS
+    if (specialKs > 99 || maxS > specialKs) specialKs = 0
+    if (specialKs > 0 && specialKs < 2) specialKs = 0
+  }
+
+  // Era check: has the number pool visibly changed over the history (rule change)?
+  let eraNotice: EngineResult['eraNotice'] = null
+  if (draws.length >= 200) {
+    const earlySlice = draws.slice(0, Math.floor(draws.length * 0.3))
+    let earlyMax = 0
+    for (const d of earlySlice) for (const n of d.sorted) earlyMax = Math.max(earlyMax, n)
+    if (maxObserved >= earlyMax + 6) {
+      let cutoffDate = ''
+      let cutoffIndex = 0
+      for (let i = 0; i < draws.length; i++) {
+        if (draws[i].sorted.some((n) => n > earlyMax)) { cutoffDate = draws[i].date; cutoffIndex = i; break }
+      }
+      eraNotice = { earlyMax, currentMax: maxObserved, cutoffDate, affected: cutoffIndex }
+    }
+  }
+
   // ---- Walk-forward backtest (learns the ensemble weights, leak-free) ----
-  const bt = runBacktest(draws, K, D, usePosition)
+  const bt = runBacktest(draws, K, D, usePosition, specialKs)
 
   // ---- Full-history state for the live prediction ----
   const state = new HistoryState(K, D)
@@ -114,6 +141,31 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
         weight,
       }))
     : []
+
+  // Bonus-ball live prediction
+  let special: SpecialResult | null = null
+  if (specialKs > 0 && bt.specialWeights && bt.specialRankHitRate) {
+    const sRaws = computeSpecialRawSignals(state, nextDow, specialKs)
+    const sZs = sRaws.map((r) => zNormalize(r.raw, specialKs))
+    const sEns = new Float64Array(specialKs + 1)
+    sRaws.forEach((r, i) => {
+      const w = bt.specialWeights![r.key] ?? 0
+      if (w <= 0) return
+      for (let v = 1; v <= specialKs; v++) sEns[v] += w * sZs[i][v]
+    })
+    const order: number[] = []
+    for (let v = 1; v <= specialKs; v++) order.push(v)
+    order.sort((a, b) => sEns[b] - sEns[a] || a - b)
+    special = {
+      K: specialKs,
+      picks: order.slice(0, 4).map((v, idx) => ({
+        number: v,
+        probability: bt.specialRankHitRate![idx] ?? 1 / specialKs,
+        count: state.sCounts[v],
+        drawsSinceSeen: state.sDrawsSince(v),
+      })),
+    }
+  }
 
   // Similar situations, annotated against the current top-10
   const top10Set = new Set(predictions.slice(0, 10).map((p) => p.number))
@@ -155,6 +207,8 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
     altCombos: combos.alts,
     drivers,
     weightsLearned,
+    special,
+    eraNotice,
     hot,
     cold,
     overdue: overdueList(state),

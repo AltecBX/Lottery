@@ -83,6 +83,48 @@ describe('parsing delimited text', () => {
     expect(out.draws[2].sorted).toEqual([9, 13, 28, 45, 51])
     expect(out.warnings.some((w) => w.includes('extra number columns'))).toBe(true)
   })
+  it("splits a Powerball-style 'Pball' column into a separate special ball (user's format)", () => {
+    const text = 'Draw Date\tDay\tFirst\tSecond\tThird\tFourth\tFifth\tPball\n' +
+      '7/27/26\tMonday\t6\t26\t46\t58\t65\t25\n' +
+      '7/25/26\tSaturday\t3\t4\t24\t36\t47\t17\n' +
+      '7/22/26\tWednesday\t4\t5\t22\t50\t58\t1\n' +
+      '7/20/26\tMonday\t2\t9\t44\t53\t59\t8\n'
+    const { draws, errors, drawSize, hasSpecial } = parseDelimitedText(text)
+    expect(errors).toEqual([])
+    expect(drawSize).toBe(5)
+    expect(hasSpecial).toBe(true)
+    expect(draws[draws.length - 1]).toMatchObject({ date: '2026-07-27', sorted: [6, 26, 46, 58, 65], special: 25 })
+  })
+  it('detects a bonus ball from value patterns even without a header', () => {
+    const rows: string[] = []
+    let seed = 5
+    const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+    for (let i = 0; i < 30; i++) {
+      const mains = new Set<number>()
+      while (mains.size < 5) mains.add(1 + Math.floor(rand() * 69))
+      const pb = 1 + Math.floor(rand() * 26)
+      const d = new Date(2025, 0, 1 + i * 3)
+      rows.push(`${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()},${[...mains].sort((a, b) => a - b).join(',')},${pb}`)
+    }
+    const { drawSize, hasSpecial, errors } = parseDelimitedText(rows.join('\n'))
+    expect(errors).toEqual([])
+    expect(drawSize).toBe(5)
+    expect(hasSpecial).toBe(true)
+  })
+  it('does NOT mistake a plain sorted 6-number game for 5+bonus', () => {
+    const rows: string[] = []
+    let seed = 9
+    const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+    for (let i = 0; i < 30; i++) {
+      const nums = new Set<number>()
+      while (nums.size < 6) nums.add(1 + Math.floor(rand() * 49))
+      const d = new Date(2025, 0, 1 + i * 3)
+      rows.push(`${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()},${[...nums].sort((a, b) => a - b).join(',')}`)
+    }
+    const { drawSize, hasSpecial } = parseDelimitedText(rows.join('\n'))
+    expect(drawSize).toBe(6)
+    expect(hasSpecial).toBe(false)
+  })
   it('merge skips exact duplicates', () => {
     const a = [D('2026-03-30', [1, 2, 3, 4, 5])]
     const b = [D('2026-03-30', [1, 2, 3, 4, 5]), D('2026-04-01', [6, 7, 8, 9, 10])]
@@ -164,6 +206,86 @@ describe('walk-forward backtest', () => {
     expect(p.actual).toHaveLength(6)
     const hits = p.actual.filter((n) => p.predictedTop.includes(n)).length
     expect(p.hits10).toBe(hits)
+  })
+})
+
+function powerballLike(n: number): Draw[] {
+  // 5-of-69 mains + 1-of-26 special with a mildly hot special value
+  let seed = 0xbeef
+  const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+  const draws: Draw[] = []
+  for (let i = 0; i < n; i++) {
+    const mains = new Set<number>()
+    while (mains.size < 5) mains.add(1 + Math.floor(rand() * 69))
+    const special = rand() < 0.18 ? 21 : 1 + Math.floor(rand() * 26)
+    const dt = new Date(2024, 0, 1 + Math.floor(i / 3) * 7 + [0, 2, 5][i % 3])
+    const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+    const sorted = [...mains].sort((a, b) => a - b)
+    draws.push({ date: iso, dow: dt.getDay(), numbers: sorted, sorted, special })
+  }
+  return draws
+}
+
+describe('bonus-ball model', () => {
+  const draws = powerballLike(400)
+  const res = runEngine(draws, DEFAULT_SETTINGS)
+
+  it('models the special ball in its own pool and logs its self-tests', () => {
+    expect(res.ok).toBe(true)
+    expect(res.drawSize).toBe(5)
+    expect(res.special).not.toBeNull()
+    expect(res.special!.K).toBeGreaterThanOrEqual(25)
+    expect(res.special!.picks.length).toBe(4)
+    for (const p of res.special!.picks) {
+      expect(p.number).toBeGreaterThanOrEqual(1)
+      expect(p.number).toBeLessThanOrEqual(res.special!.K)
+      expect(p.probability).toBeGreaterThan(0)
+    }
+    expect(res.backtest.special).toBeDefined()
+    expect(res.backtest.special!.evaluated).toBeGreaterThan(300)
+    const last = res.backtest.points[res.backtest.points.length - 1]
+    expect(last.specialTop).toHaveLength(3)
+    expect(typeof last.specialActual).toBe('number')
+    // The planted hot special (21) should be catchable: top-3 above chance
+    expect(res.backtest.special!.top3).toBeGreaterThan(res.backtest.special!.chance3)
+  })
+
+  it('special leakage guard: replacing the final draw leaves earlier points identical', () => {
+    const mutated = [...draws.slice(0, -1), { ...draws[draws.length - 1], special: 5, date: '2026-12-30' }]
+    const a = runEngine(draws, DEFAULT_SETTINGS)
+    const b = runEngine(mutated, DEFAULT_SETTINGS)
+    for (let i = 0; i < a.backtest.points.length - 1; i++) {
+      expect(a.backtest.points[i]).toEqual(b.backtest.points[i])
+    }
+  })
+})
+
+describe('era detection', () => {
+  it('flags a mid-history pool change and points at the cutoff', () => {
+    let seed = 4242
+    const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+    const draws: Draw[] = []
+    for (let i = 0; i < 300; i++) {
+      const pool = i < 150 ? 59 : 69 // rule change halfway
+      const mains = new Set<number>()
+      while (mains.size < 5) mains.add(1 + Math.floor(rand() * pool))
+      const dt = new Date(2020, 0, 1 + Math.floor(i / 3) * 7 + [0, 2, 5][i % 3])
+      const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+      const sorted = [...mains].sort((a, b) => a - b)
+      draws.push({ date: iso, dow: dt.getDay(), numbers: sorted, sorted })
+    }
+    const res = runEngine(draws, DEFAULT_SETTINGS)
+    expect(res.ok).toBe(true)
+    expect(res.eraNotice).not.toBeNull()
+    expect(res.eraNotice!.earlyMax).toBeLessThanOrEqual(59)
+    expect(res.eraNotice!.currentMax).toBeGreaterThan(59)
+    expect(res.eraNotice!.cutoffDate >= draws[140].date).toBe(true)
+  })
+
+  it('stays quiet on a stable pool', () => {
+    const sample = generateSampleDraws()
+    const res = runEngine(sample, DEFAULT_SETTINGS)
+    expect(res.eraNotice).toBeNull()
   })
 })
 

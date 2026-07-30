@@ -1,9 +1,9 @@
 # Pattern Lab — Number Prediction Laboratory
 
 A polished, fully client-side web app that analyzes a lottery-style draw history (date · day of week · the drawn
-numbers — 5- and 6-number games are auto-detected, 4–10 supported), discovers the patterns hiding in it, and ranks
-the most probable numbers for the **next** draw — with every prediction explained, probability-calibrated, and
-honestly stress-tested by a walk-forward backtest.
+numbers — 5- and 6-number games are auto-detected, 4–10 supported, with or without a Powerball-style bonus ball),
+discovers the patterns hiding in it, and ranks the most probable numbers for the **next** draw — with every
+prediction explained, probability-calibrated, and honestly stress-tested by a walk-forward backtest.
 
 **The model is always self-testing.** For every draw in your history it re-predicts that draw using only the draws
 before it, scores itself against what actually hit, and re-fits its signal weights — so each new result you add
@@ -48,9 +48,13 @@ Date       | Day of Week | Number 1 | Number 2 | Number 3 | Number 4 | Number 5 
 
 - Dates: `M/D/YYYY`, `D/M/YYYY` (auto-detected), `YYYY-MM-DD`, `Mar 30, 2026`, or Excel date cells.
 - The Day-of-Week column is optional — it is always re-derived from the date (mismatches are flagged).
-- Numbers per draw is auto-detected (the most common count across rows). If your file carries bonus columns
-  that shouldn't count, pin "Numbers per draw" in Settings before importing.
+- Numbers per draw is auto-detected (the most common count across rows).
+- **Powerball-style games**: a trailing bonus column (header like `Pball`/`Bonus`/`Mega Ball`, or values from a
+  clearly smaller pool that break the mains' sort order) is detected automatically, analyzed in **its own pool**
+  with its own learned model and backtest, and predicted as a separate red ball. Override in Settings if needed.
 - Exact duplicate rows are skipped; minority rows with extra columns are trimmed with a warning.
+- **Rule changes**: if the number pool visibly grew mid-history (e.g. Powerball's 59→69 change), the app flags it
+  and offers a one-click trim to the current era — old-pool draws silently bias every frequency statistic.
 - Excel files (`.xlsx`, `.xls`, `.ods`) read the first sheet; CSV/TSV/pasted text also work.
 - New results can be added manually ("+ Add result") — the whole model retrains instantly on every change.
 

@@ -48,6 +48,7 @@ export function HistoryTable({ draws, onDelete }: { draws: Draw[]; onDelete: (dr
                 <td>
                   <span className="pair-cell" style={{ gap: 5 }}>
                     {d.numbers.map((n) => <Ball key={n} n={n} size="sm" />)}
+                    {d.special !== undefined && <Ball n={d.special} size="sm" variant="special" title="Bonus ball" />}
                   </span>
                 </td>
                 <td>

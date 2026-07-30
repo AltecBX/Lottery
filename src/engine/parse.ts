@@ -5,8 +5,10 @@ export interface ParseOutcome {
   draws: Draw[]
   errors: string[]
   warnings: string[]
-  /** Numbers per draw detected (or enforced) for this batch */
+  /** Main numbers per draw detected (or enforced) for this batch */
   drawSize: number
+  /** Whether a bonus/special ball column was detected and split off */
+  hasSpecial: boolean
 }
 
 export const MIN_DRAW_SIZE = 4
@@ -89,20 +91,34 @@ interface PendingRow {
   numerics: number[]
 }
 
+const BONUS_HEADER = /p(ower)?[\s_-]?ball|pball|bonus|mega[\s_-]?ball|extra|star|lucky|\bpb\b|\bsb\b/i
+
 /**
  * Interpret rows of cells as draw history.
- * Expected shape: Date | [Day of week] | N1 … Nk [| extra ignored]
- * The numbers-per-draw count is auto-detected (most common count across rows,
- * 4–10) unless `expectedSize` pins it — useful when a file carries bonus balls.
+ * Expected shape: Date | [Day of week] | N1 … Nk [| Bonus]
+ * The main-numbers count is auto-detected (most common count across rows,
+ * 4–10) unless `expectedSize` pins it. A trailing bonus/special ball column
+ * (Powerball-style) is split off when the header names it, the caller forces
+ * it, or the values clearly come from a separate smaller pool.
  */
-export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0): ParseOutcome {
+export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto' | 'yes' | 'no' = 'auto'): ParseOutcome {
   const errors: string[] = []
   const warnings: string[] = []
   let rows = rowsIn.filter((r) => r.some((c) => String(c).trim() !== ''))
-  if (rows.length === 0) return { draws: [], errors: ['No rows found in the file.'], warnings, drawSize: 0 }
+  if (rows.length === 0) return { draws: [], errors: ['No rows found in the file.'], warnings, drawSize: 0, hasSpecial: false }
 
-  if (isHeaderRow(rows[0])) rows = rows.slice(1)
-  if (rows.length === 0) return { draws: [], errors: ['Only a header row was found.'], warnings, drawSize: 0 }
+  let bonusHeaderHit = false
+  if (isHeaderRow(rows[0])) {
+    const header = rows[0]
+    for (let i = header.length - 1; i >= 0; i--) {
+      const cell = String(header[i]).trim()
+      if (cell === '') continue
+      bonusHeaderHit = BONUS_HEADER.test(cell)
+      break
+    }
+    rows = rows.slice(1)
+  }
+  if (rows.length === 0) return { draws: [], errors: ['Only a header row was found.'], warnings, drawSize: 0, hasSpecial: false }
 
   // Decide day-first vs month-first by scanning ambiguous triples across the file
   let dayFirst = false
@@ -164,27 +180,68 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0): ParseOutcome {
   })
 
   if (pending.length === 0) {
-    return { draws: [], errors, warnings, drawSize: 0 }
+    return { draws: [], errors, warnings, drawSize: 0, hasSpecial: false }
   }
 
-  // Determine numbers-per-draw: explicit override, else the most common count
+  // Decide whether the last numeric column is a bonus/special ball
+  let hasSpecial = false
+  {
+    const counts = pending.map((p) => p.numerics.length)
+    const modal = (() => {
+      const f = new Map<number, number>()
+      for (const c of counts) f.set(c, (f.get(c) ?? 0) + 1)
+      let bc = 0, bf = -1
+      for (const [c, ff] of f) if (ff > bf || (ff === bf && c > bc)) { bc = c; bf = ff }
+      return bc
+    })()
+    if (bonusMode === 'yes') {
+      hasSpecial = modal >= MIN_DRAW_SIZE + 1
+      if (!hasSpecial) warnings.push('Bonus-ball mode is on, but rows do not carry enough number columns for it.')
+    } else if (bonusMode === 'auto' && modal >= MIN_DRAW_SIZE + 1) {
+      if (bonusHeaderHit) {
+        hasSpecial = true
+      } else {
+        // Value heuristics over rows with the modal count: the last column comes
+        // from a clearly smaller pool AND breaks the ascending order of the mains
+        const full = pending.filter((p) => p.numerics.length >= modal)
+        if (full.length >= 10) {
+          let maxMains = 0, maxLast = 0, sortedMains = 0, breaksSort = 0
+          for (const p of full) {
+            const mains = p.numerics.slice(0, modal - 1)
+            const last = p.numerics[modal - 1]
+            maxLast = Math.max(maxLast, last)
+            for (const v of mains) maxMains = Math.max(maxMains, v)
+            const asc = mains.every((v, i) => i === 0 || v >= mains[i - 1])
+            if (asc) sortedMains++
+            if (asc && last < mains[mains.length - 1]) breaksSort++
+          }
+          const rangeHit = maxLast * 1.8 <= maxMains && maxLast <= 45
+          const sortHit = sortedMains / full.length >= 0.9 && breaksSort / full.length >= 0.3
+          hasSpecial = rangeHit && sortHit
+        }
+      }
+    }
+  }
+
+  // Determine main numbers-per-draw: explicit override, else the most common count
   let drawSize = expectedSize
   if (drawSize <= 0) {
     const countFreq = new Map<number, number>()
     for (const p of pending) {
-      const c = Math.min(p.numerics.length, MAX_DRAW_SIZE)
+      const c = Math.min(p.numerics.length, MAX_DRAW_SIZE + (hasSpecial ? 1 : 0))
       countFreq.set(c, (countFreq.get(c) ?? 0) + 1)
     }
     let bestCount = 0, bestFreq = -1
     for (const [c, f] of countFreq) {
       if (f > bestFreq || (f === bestFreq && c > bestCount)) { bestCount = c; bestFreq = f }
     }
-    drawSize = bestCount
+    drawSize = bestCount - (hasSpecial ? 1 : 0)
   }
   if (drawSize < MIN_DRAW_SIZE || drawSize > MAX_DRAW_SIZE) {
-    errors.push(`Rows carry ${drawSize} numbers — supported games have ${MIN_DRAW_SIZE}–${MAX_DRAW_SIZE} numbers per draw.`)
-    return { draws: [], errors, warnings, drawSize: 0 }
+    errors.push(`Rows carry ${drawSize} main numbers — supported games have ${MIN_DRAW_SIZE}–${MAX_DRAW_SIZE} numbers per draw.`)
+    return { draws: [], errors, warnings, drawSize: 0, hasSpecial: false }
   }
+  const needed = drawSize + (hasSpecial ? 1 : 0)
 
   // Pass 2: validate each row against the draw size
   const draws: Draw[] = []
@@ -192,13 +249,15 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0): ParseOutcome {
   let ignoredExtraCols = 0
   let duplicates = 0
   for (const p of pending) {
-    if (p.numerics.length < drawSize) {
-      errors.push(`Row ${p.line}: found ${p.numerics.length} numbers, need ${drawSize}.`)
+    if (p.numerics.length < needed) {
+      errors.push(`Row ${p.line}: found ${p.numerics.length} numbers, need ${needed}${hasSpecial ? ` (${drawSize} + bonus ball)` : ''}.`)
       continue
     }
-    if (p.numerics.length > drawSize) ignoredExtraCols++
+    if (p.numerics.length > needed) ignoredExtraCols++
     const nums = p.numerics.slice(0, drawSize)
-    if (nums.some((n) => n < 1 || n > 999)) {
+    // The bonus ball is the LAST numeric on the row (extra middle columns are trimmed)
+    const special = hasSpecial ? p.numerics[Math.min(p.numerics.length, needed) - 1] : undefined
+    if (nums.some((n) => n < 1 || n > 999) || (special !== undefined && (special < 1 || special > 999))) {
       errors.push(`Row ${p.line}: numbers must be between 1 and 999.`)
       continue
     }
@@ -207,13 +266,19 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0): ParseOutcome {
       continue
     }
     const sorted = [...nums].sort((a, b) => a - b)
-    const key = `${p.iso}|${sorted.join(',')}`
+    const key = `${p.iso}|${sorted.join(',')}|${special ?? ''}`
     if (seen.has(key)) {
       duplicates++
       continue
     }
     seen.add(key)
-    draws.push({ date: p.iso, dow: p.dow, numbers: nums, sorted })
+    const draw: Draw = { date: p.iso, dow: p.dow, numbers: nums, sorted }
+    if (special !== undefined) draw.special = special
+    draws.push(draw)
+  }
+
+  if (hasSpecial) {
+    warnings.push(`Detected ${drawSize} main numbers + a bonus ball column — the bonus is analyzed in its own pool. (Wrong? Set "Bonus ball" in Settings and re-import.)`)
   }
 
   if (ignoredExtraCols > 0) {
@@ -225,16 +290,16 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0): ParseOutcome {
   }
 
   draws.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-  return { draws, errors, warnings, drawSize }
+  return { draws, errors, warnings, drawSize, hasSpecial }
 }
 
-export function parseDelimitedText(text: string, expectedSize = 0): ParseOutcome {
-  return rowsToDraws(splitDelimited(text), expectedSize)
+export function parseDelimitedText(text: string, expectedSize = 0, bonusMode: 'auto' | 'yes' | 'no' = 'auto'): ParseOutcome {
+  return rowsToDraws(splitDelimited(text), expectedSize, bonusMode)
 }
 
 /** Merge new draws into existing history, skipping exact duplicates. */
 export function mergeDraws(existing: Draw[], incoming: Draw[]): { merged: Draw[]; added: number; skipped: number } {
-  const key = (d: Draw) => `${d.date}|${d.sorted.join(',')}`
+  const key = (d: Draw) => `${d.date}|${d.sorted.join(',')}|${d.special ?? ''}`
   const have = new Set(existing.map(key))
   const merged = [...existing]
   let added = 0, skipped = 0
@@ -251,8 +316,9 @@ export function mergeDraws(existing: Draw[], incoming: Draw[]): { merged: Draw[]
 /** Serialize history back to CSV for export. */
 export function drawsToCsv(draws: Draw[]): string {
   const n = draws.length > 0 ? draws[0].numbers.length : 5
-  const head = ['Date', 'Day of Week', ...Array.from({ length: n }, (_, i) => `Number ${i + 1}`)].join(',')
+  const hasSpecial = draws.some((d) => d.special !== undefined)
+  const head = ['Date', 'Day of Week', ...Array.from({ length: n }, (_, i) => `Number ${i + 1}`), ...(hasSpecial ? ['Bonus'] : [])].join(',')
   const dows = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-  const lines = draws.map((d) => `${d.date},${dows[d.dow]},${d.numbers.join(',')}`)
+  const lines = draws.map((d) => `${d.date},${dows[d.dow]},${d.numbers.join(',')}${hasSpecial ? ',' + (d.special ?? '') : ''}`)
   return [head, ...lines].join('\n')
 }

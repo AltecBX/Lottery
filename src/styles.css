@@ -152,6 +152,9 @@ input, select, textarea { font: inherit; color: var(--ink); }
 .ball.sm { width: 28px; height: 28px; font-size: 12.5px; }
 .ball.hero { width: 58px; height: 58px; font-size: 23px; background: var(--accent); color: var(--accent-ink); border: none; box-shadow: var(--shadow); }
 .ball.pick { background: var(--accent); color: var(--accent-ink); border: none; }
+.ball.special { background: var(--hot); color: #ffffff; border: none; }
+:root[data-theme='dark'] .ball.special { color: #0b0b0b; }
+.special-label { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .ball.faded { opacity: 0.55; }
 .ball.match { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -279,6 +282,8 @@ details.data-table .tbl { margin-top: 8px; font-size: 12.5px; }
   padding: 10px 14px; border-radius: 10px; font-size: 13.5px; color: var(--ink-2);
 }
 .notice.warn { border-color: color-mix(in srgb, var(--series-2) 40%, transparent); }
+.era-banner { grid-column: span 12; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.era-banner .grow { flex: 1; min-width: 260px; }
 
 .computing {
   position: fixed; bottom: 18px; right: 18px; z-index: 60;
