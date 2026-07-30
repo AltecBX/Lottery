@@ -25,6 +25,11 @@ set **Source** to **GitHub Actions**. After the next push to `main`, the app is 
 `https://<your-username>.github.io/Lottery/` — bookmark it on any device. Your draw data is stored in that
 browser's `localStorage`, so it's there every time you come back (per device/browser).
 
+**On your iPhone (recommended).** Open the site in Safari → tap **Share** → **Add to Home Screen**. It installs
+like an app with its own icon, launches full-screen, and keeps your games and saved tickets on the phone. The
+mobile layout has a bottom action bar (Sync · Add result · Tickets · Menu), bottom-sheet dialogs, and it
+auto-checks for new official results when you open the app after a draw day.
+
 **Run locally (for development).** Install [Node.js LTS](https://nodejs.org), then:
 
 ```bash
@@ -32,7 +37,7 @@ npm install
 npm run dev        # development server → http://localhost:5173
 npm run build      # production build (output in dist/)
 npm run preview    # serve the production build
-npm test           # engine test suite (16 tests, incl. leakage guard)
+npm test           # engine test suite (35 tests, incl. leakage guards)
 ```
 
 The `dist/` folder produced by `npm run build` is plain static files — it can be hosted on any static host

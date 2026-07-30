@@ -2,6 +2,11 @@ import type { Draw, Settings } from './types.ts'
 import { DEFAULT_SETTINGS } from './types.ts'
 import type { SyncKey } from './sync.ts'
 
+export interface SavedTicket {
+  numbers: number[]
+  special?: number
+}
+
 /** One tracked game: its own history, settings, and (optionally) an official sync source. */
 export interface GameData {
   id: string
@@ -10,6 +15,8 @@ export interface GameData {
   syncKey?: SyncKey
   draws: Draw[]
   settings: Settings
+  /** Tickets the user saved to auto-check against each new draw. */
+  savedTickets?: SavedTicket[]
 }
 
 export interface GamesState {

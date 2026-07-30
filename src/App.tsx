@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Draw, Settings } from './engine/types.ts'
 import { DEFAULT_SETTINGS } from './engine/types.ts'
 import { mergeDraws } from './engine/parse.ts'
@@ -6,7 +6,7 @@ import { generateSampleDraws } from './engine/sample.ts'
 import { fetchOfficialResults, type SyncKey } from './engine/sync.ts'
 import {
   createGame, daysSinceLastDraw, migrateLegacy, OFFICIAL_GAMES,
-  type GameData, type GamesState,
+  type GameData, type GamesState, type SavedTicket,
 } from './engine/games.ts'
 import { formatDate } from './engine/dates.ts'
 import { useEngine } from './hooks/useEngine.ts'
@@ -69,7 +69,7 @@ export default function App() {
   const initial = useMemo(loadInitialGames, [])
   const [gamesState, setGamesState] = useLocalStorage<GamesState>('patternlab.games.v1', initial)
   const [themeChoice, cycleTheme] = useTheme()
-  const [dialog, setDialog] = useState<'' | 'import' | 'add' | 'settings' | 'addgame'>('')
+  const [dialog, setDialog] = useState<'' | 'import' | 'add' | 'settings' | 'addgame' | 'menu'>('')
   const [flash, setFlash] = useState('')
   const [syncing, setSyncing] = useState(false)
 
@@ -236,6 +236,51 @@ export default function App() {
     say('Trimmed to the current era — model retrained on the modern pool only.')
   }, [updateActiveDraws])
 
+  const saveTicket = useCallback((ticket: SavedTicket) => {
+    setGamesState((s) => {
+      const active = s.games.find((x) => x.id === s.activeId) ?? s.games[0]
+      if (!active) return s
+      const existing = active.savedTickets ?? []
+      const key = (t: SavedTicket) => `${[...t.numbers].sort((a, b) => a - b).join(',')}|${t.special ?? ''}`
+      if (existing.some((t) => key(t) === key(ticket))) return s
+      return {
+        ...s,
+        games: s.games.map((g) => (g.id === active.id ? { ...g, savedTickets: [...existing, ticket] } : g)),
+      }
+    })
+    say('Ticket saved — it will be checked against every new draw.')
+  }, [setGamesState])
+
+  const removeTicket = useCallback((index: number) => {
+    setGamesState((s) => {
+      const active = s.games.find((x) => x.id === s.activeId) ?? s.games[0]
+      if (!active) return s
+      return {
+        ...s,
+        games: s.games.map((g) => (g.id === active.id ? { ...g, savedTickets: (g.savedTickets ?? []).filter((_, i) => i !== index) } : g)),
+      }
+    })
+  }, [setGamesState])
+
+  // Seamless mode: when official games look stale, fetch new results on open
+  // (throttled to once per hour; toasts only when something new arrived).
+  const syncGameRef = useRef(syncGame)
+  syncGameRef.current = syncGame
+  useEffect(() => {
+    const KEY = 'patternlab.autosync'
+    try {
+      const last = Number(window.localStorage.getItem(KEY) ?? 0)
+      if (Date.now() - last < 60 * 60 * 1000) return
+      const stale = gamesState.games.filter((g) => g.syncKey && g.draws.length > 0 && daysSinceLastDraw(g, Date.now()) > 1.2)
+      if (stale.length === 0) return
+      window.localStorage.setItem(KEY, String(Date.now()))
+      void (async () => {
+        for (const g of stale) await syncGameRef.current(g.id, true)
+      })()
+    } catch { /* storage unavailable — skip auto-sync */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const staleDays = activeGame?.syncKey && hasData ? daysSinceLastDraw(activeGame, Date.now()) : 0
   const showStaleNudge = !!activeGame?.syncKey && hasData && staleDays > 4
 
@@ -371,11 +416,18 @@ export default function App() {
                   </button>
                 </div>
               )}
-              <PredictionPanel res={result} />
+              <PredictionPanel res={result} gameName={activeGame?.name ?? ''} />
               <RealityPanel res={result} />
               <RankingTable res={result} />
               <PredictionLog res={result} />
-              <TicketLab key={`t-${activeGame?.id}-${result.lastDate}-${result.drawCount}`} res={result} draws={draws} />
+              <TicketLab
+                key={`t-${activeGame?.id}-${result.lastDate}-${result.drawCount}`}
+                res={result}
+                draws={draws}
+                savedTickets={activeGame?.savedTickets ?? []}
+                onSaveTicket={saveTicket}
+                onRemoveTicket={removeTicket}
+              />
               <InspectorPanel key={`i-${activeGame?.id}`} res={result} draws={draws} />
               <HotColdOverdue res={result} />
               <DowPanel res={result} />
@@ -420,6 +472,27 @@ export default function App() {
         <div className="computing">✓ {flash}</div>
       )}
 
+      <nav className="mobile-bar" aria-label="Quick actions">
+        {activeGame?.syncKey ? (
+          <button onClick={() => void syncGame(activeGame.id)} disabled={syncing}>
+            <span className="ico">⟳</span> Sync
+          </button>
+        ) : (
+          <button onClick={() => setDialog('import')} disabled={!activeGame}>
+            <span className="ico">⤒</span> Import
+          </button>
+        )}
+        <button className="primary" onClick={() => setDialog('add')} disabled={!hasData}>
+          <span className="ico">＋</span> Add result
+        </button>
+        <button onClick={() => document.getElementById('ticket')?.scrollIntoView({ behavior: 'smooth' })} disabled={!hasData}>
+          <span className="ico">🎟</span> Tickets
+        </button>
+        <button onClick={() => setDialog('menu')}>
+          <span className="ico">☰</span> Menu
+        </button>
+      </nav>
+
       <ImportDialog
         open={dialog === 'import'}
         onClose={() => setDialog('')}
@@ -451,6 +524,18 @@ export default function App() {
         onClearAll={() => { updateActiveDraws(() => []); setDialog('') }}
         onRemoveGame={removeActiveGame}
       />
+      {dialog === 'menu' && (
+        <MenuSheet
+          onClose={() => setDialog('')}
+          themeChoice={themeChoice}
+          onTheme={cycleTheme}
+          onImport={() => setDialog('import')}
+          onAddGame={() => setDialog('addgame')}
+          onSettings={() => setDialog('settings')}
+          canAct={!!activeGame}
+        />
+      )}
+
       <AddGameDialog
         open={dialog === 'addgame'}
         onClose={() => setDialog('')}
@@ -461,5 +546,38 @@ export default function App() {
         onSample={addSampleGame}
       />
     </div>
+  )
+}
+
+
+function MenuSheet({ onClose, themeChoice, onTheme, onImport, onAddGame, onSettings, canAct }: {
+  onClose: () => void
+  themeChoice: string
+  onTheme: () => void
+  onImport: () => void
+  onAddGame: () => void
+  onSettings: () => void
+  canAct: boolean
+}) {
+  const ref = useRef<HTMLDialogElement>(null)
+  useEffect(() => {
+    const dlg = ref.current
+    if (dlg && !dlg.open) dlg.showModal()
+  }, [])
+  return (
+    <dialog ref={ref} onClose={onClose} onCancel={onClose}>
+      <div className="dlg-head">
+        <h2>Menu</h2>
+        <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
+      </div>
+      <div className="dlg-body menu-sheet">
+        <button onClick={onImport} disabled={!canAct}><span className="ico">⤒</span> Import results</button>
+        <button onClick={onAddGame}><span className="ico">🎲</span> Add a game</button>
+        <button onClick={onSettings} disabled={!canAct}><span className="ico">⚙</span> Settings</button>
+        <button onClick={onTheme}>
+          <span className="ico">◐</span> Theme: {themeChoice === 'auto' ? 'Auto' : themeChoice === 'dark' ? 'Dark' : 'Light'}
+        </button>
+      </div>
+    </dialog>
   )
 }
