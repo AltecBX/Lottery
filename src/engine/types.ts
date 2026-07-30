@@ -4,9 +4,9 @@ export interface Draw {
   date: string
   /** 0 = Sunday … 6 = Saturday (derived from date) */
   dow: number
-  /** The five numbers in the order they appear in the source data */
+  /** The drawn numbers in the order they appear in the source data */
   numbers: number[]
-  /** The five numbers sorted ascending */
+  /** The drawn numbers sorted ascending */
   sorted: number[]
 }
 
@@ -17,12 +17,15 @@ export interface Settings {
   nextDate: string
   /** Window size for the selectable-window frequency explorer (UI only). */
   exploreWindow: number
+  /** Numbers per draw. 0 = auto-detect from data (use when a file has bonus columns). */
+  drawSize: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   poolMax: 0,
   nextDate: '',
   exploreWindow: 20,
+  drawSize: 0,
 }
 
 /** One prediction signal's normalized scores plus bookkeeping. */
@@ -102,10 +105,15 @@ export interface BacktestPoint {
   index: number
   date: string
   dow: number
-  hits5: number
+  /** Hits inside the model's top-(drawSize) picks for this draw */
+  hitsPick: number
   hits10: number
-  baselineHits5: number
+  baselineHitsPick: number
   baselineHits10: number
+  /** What the model (using only earlier draws) ranked top-10 for this draw */
+  predictedTop: number[]
+  /** What was actually drawn */
+  actual: number[]
 }
 
 export interface SignalPerformance {
@@ -125,14 +133,14 @@ export interface SignalPerformance {
 export interface BacktestSummary {
   evaluated: number
   minHistory: number
-  /** Chance expectation for hits in a random top-5 / top-10 */
-  chance5: number
+  /** Chance expectation for hits in a random top-(drawSize) / top-10 */
+  chancePick: number
   chance10: number
-  ensemble5: number
+  ensemblePick: number
   ensemble10: number
-  baseline5: number
+  baselinePick: number
   baseline10: number
-  /** Percent of evaluated draws where ensemble top-10 caught >= 2 of 5 */
+  /** Percent of evaluated draws where ensemble top-10 caught >= 2 winners */
   ens10AtLeast2: number
   points: BacktestPoint[]
   byDow: { dow: number; draws: number; ensemble10: number; baseline10: number }[]
@@ -200,10 +208,20 @@ export interface PositionProfile {
   histogram: number[]
 }
 
+/** A signal actively driving the next prediction (weekday-adapted weight). */
+export interface DriverEntry {
+  key: string
+  label: string
+  description: string
+  weight: number
+}
+
 export interface EngineResult {
   ok: boolean
   message?: string
   K: number
+  /** Numbers per draw in this dataset */
+  drawSize: number
   drawCount: number
   firstDate: string
   lastDate: string
@@ -214,10 +232,15 @@ export interface EngineResult {
   inputSorted: boolean
 
   predictions: NumberPrediction[]
-  top5: NumberPrediction[]
+  /** The model's actual pick set: top drawSize numbers */
+  topPick: NumberPrediction[]
   top10: NumberPrediction[]
   bestCombo: ComboPrediction | null
   altCombos: ComboPrediction[]
+  /** Signals driving the next prediction, weekday-adapted, strongest first */
+  drivers: DriverEntry[]
+  /** True when learned weights differ meaningfully from a uniform blend */
+  weightsLearned: boolean
 
   hot: HotColdEntry[]
   cold: HotColdEntry[]

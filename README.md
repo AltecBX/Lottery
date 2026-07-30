@@ -1,8 +1,13 @@
 # Pattern Lab — Number Prediction Laboratory
 
-A polished, fully client-side web app that analyzes a 5-number draw history (date · day of week · five numbers),
-discovers the patterns hiding in it, and ranks the most probable numbers for the **next** draw — with every
-prediction explained, probability-calibrated, and honestly stress-tested by a walk-forward backtest.
+A polished, fully client-side web app that analyzes a lottery-style draw history (date · day of week · the drawn
+numbers — 5- and 6-number games are auto-detected, 4–10 supported), discovers the patterns hiding in it, and ranks
+the most probable numbers for the **next** draw — with every prediction explained, probability-calibrated, and
+honestly stress-tested by a walk-forward backtest.
+
+**The model is always self-testing.** For every draw in your history it re-predicts that draw using only the draws
+before it, scores itself against what actually hit, and re-fits its signal weights — so each new result you add
+makes the next prediction a little better informed. The Prediction Log panel shows this draw-by-draw record.
 
 Built with React + TypeScript + Vite. All computation runs in your browser (in a Web Worker); your data never
 leaves the machine and persists in `localStorage`.
@@ -37,23 +42,25 @@ draw, click **+ Add result** — the model retrains instantly.
 One row per draw — header optional, delimiter auto-detected (comma, tab, semicolon, or `|`):
 
 ```
-Date       | Day of Week | Number 1 | Number 2 | Number 3 | Number 4 | Number 5
-3/30/2026  | Monday      | 9        | 13       | 28       | 45       | 51
+Date       | Day of Week | Number 1 | Number 2 | Number 3 | Number 4 | Number 5 | Number 6
+3/30/2026  | Monday      | 9        | 13       | 28       | 45       | 49       | 3
 ```
 
 - Dates: `M/D/YYYY`, `D/M/YYYY` (auto-detected), `YYYY-MM-DD`, `Mar 30, 2026`, or Excel date cells.
 - The Day-of-Week column is optional — it is always re-derived from the date (mismatches are flagged).
-- Extra columns (e.g. a bonus ball) are ignored with a warning; exact duplicate rows are skipped.
+- Numbers per draw is auto-detected (the most common count across rows). If your file carries bonus columns
+  that shouldn't count, pin "Numbers per draw" in Settings before importing.
+- Exact duplicate rows are skipped; minority rows with extra columns are trimmed with a warning.
 - Excel files (`.xlsx`, `.xls`, `.ods`) read the first sheet; CSV/TSV/pasted text also work.
 - New results can be added manually ("+ Add result") — the whole model retrains instantly on every change.
 
 ## The analysis engine
 
-Sixteen signals are computed for every number, strictly from data prior to the draw being predicted:
+Nineteen signals are computed for every number, strictly from data prior to the draw being predicted:
 
 | Family | Signals |
 |---|---|
-| Frequency | overall frequency · day-of-week frequency · recency-weighted (EWMA) · last 10 / 20 / 50 windows · number-line zones (kernel-smoothed) |
+| Frequency | overall frequency · day-of-week frequency · recent form on the target weekday · recency at three time scales (half-lives 8 / 20 / 45) · last 10 / 20 / 50 windows · number-line zones (kernel-smoothed) |
 | Gap dynamics | draws since last seen vs own average gap (overdue) · gap-rhythm/cycle fit |
 | Momentum | hot-streak z-score · short-vs-long window momentum · consecutive-appearance streaks |
 | Sequence | repeat-from-last-draw probability · follower transitions (P(i next \| j previous)) · day-of-week × previous-draw transitions |
@@ -66,7 +73,10 @@ Sixteen signals are computed for every number, strictly from data prior to the d
 - **Weights are learned, not assumed**: an online walk-forward pass measures every signal's hit rate above
   chance, and weights follow demonstrated skill (sharpened, floored at zero). A signal must beat chance both
   recently *and* over its lifetime to earn weight, and no concentration happens until the best signal's edge
-  clears its standard error — on genuinely random data the weights stay flat and the app says so.
+  clears ~2 standard errors (max-of-many-signals noise ceiling) — on genuinely random data the weights stay
+  flat and the app says so. (A per-weekday weight adaptation was evaluated and removed: it added no accuracy
+  on structured data and amplified weekday noise streaks on random data; weekday structure lives in the
+  per-number signals instead.)
 - **Probabilities are calibrated**: the "estimated probability" for rank *r* is the smoothed, isotonic-regressed
   historical hit rate of rank-*r* predictions in the backtest — not a softmax guess.
 - Output: top-5 with confidence levels, top-10 candidates, expandable per-number explanations (signal

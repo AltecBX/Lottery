@@ -21,7 +21,7 @@ export function BacktestPanel({ res }: { res: EngineResult }) {
       id="backtest"
       title="Backtest results"
       hint={`walk-forward · ${bt.evaluated} draws evaluated · first ${bt.minHistory} used as warm-up`}
-      sub="Every historical draw was predicted using only the draws before it — then compared to what actually happened. This is also how the ensemble learns its signal weights: signals that don't beat chance get their weight cut to zero."
+      sub="Every historical draw was predicted using only the draws before it — then compared to what actually happened (see the Prediction log for the draw-by-draw record). This is also how the ensemble learns: signal weights are re-fit after every draw, per weekday, and signals that don't beat chance get their weight cut to zero."
     >
       <div className="tiles" style={{ marginBottom: 18 }}>
         <Tile
@@ -42,9 +42,9 @@ export function BacktestPanel({ res }: { res: EngineResult }) {
           deltaDir={late10 > lateBase ? 'up' : late10 < lateBase ? 'down' : 'flat'}
         />
         <Tile
-          label="Ensemble · hits in top-5"
-          value={bt.ensemble5.toFixed(2)}
-          delta={`chance ${bt.chance5.toFixed(2)} · baseline ${bt.baseline5.toFixed(2)}`}
+          label={`Ensemble · hits in top-${res.drawSize}`}
+          value={bt.ensemblePick.toFixed(2)}
+          delta={`chance ${bt.chancePick.toFixed(2)} · baseline ${bt.baselinePick.toFixed(2)}`}
         />
       </div>
 
@@ -104,7 +104,7 @@ export function BacktestPanel({ res }: { res: EngineResult }) {
               <tbody>
                 {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((r) => {
                   const rate = bt.rankHitRate[r] ?? 0
-                  const chance = 5 / Math.max(1, res.K)
+                  const chance = res.drawSize / Math.max(1, res.K)
                   return (
                     <tr key={r}>
                       <td>#{r + 1}</td>

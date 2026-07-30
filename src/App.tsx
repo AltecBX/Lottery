@@ -15,11 +15,13 @@ import { TrendsPanel } from './components/TrendsPanel.tsx'
 import { SimilarPanel } from './components/SimilarPanel.tsx'
 import { BacktestPanel } from './components/BacktestPanel.tsx'
 import { HistoryTable } from './components/HistoryTable.tsx'
+import { PredictionLog } from './components/PredictionLog.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 
 const NAV = [
   ['prediction', 'Prediction'],
   ['ranking', 'Ranking'],
+  ['log', 'Prediction log'],
   ['hotcold', 'Hot / Cold'],
   ['dow', 'Weekdays'],
   ['pairs', 'Pairs'],
@@ -32,7 +34,9 @@ const NAV = [
 
 export default function App() {
   const [draws, setDraws] = useLocalStorage<Draw[]>('patternlab.draws.v1', [])
-  const [settings, setSettings] = useLocalStorage<Settings>('patternlab.settings.v1', DEFAULT_SETTINGS)
+  const [storedSettings, setSettings] = useLocalStorage<Settings>('patternlab.settings.v1', DEFAULT_SETTINGS)
+  // Older stored settings may predate newer fields — always merge over defaults
+  const settings = useMemo(() => ({ ...DEFAULT_SETTINGS, ...storedSettings }), [storedSettings])
   const [themeChoice, cycleTheme] = useTheme()
   const [dialog, setDialog] = useState<'' | 'import' | 'add' | 'settings'>('')
   const [flash, setFlash] = useState('')
@@ -44,6 +48,8 @@ export default function App() {
     for (const d of draws) for (const n of d.sorted) m = Math.max(m, n)
     return m
   }, [draws])
+
+  const detectedSize = useMemo(() => (draws.length > 0 ? draws[draws.length - 1].sorted.length : 0), [draws])
 
   const say = (msg: string) => {
     setFlash(msg)
@@ -72,8 +78,9 @@ export default function App() {
   }, [setDraws])
 
   const loadSample = () => {
-    setDraws(generateSampleDraws())
-    say('Sample dataset loaded — 715 synthetic draws with planted patterns to explore.')
+    const sample = generateSampleDraws()
+    setDraws(sample)
+    say(`Sample dataset loaded — ${sample.length} synthetic 6-number draws with planted patterns to explore.`)
   }
 
   const existingDates = useMemo(() => new Set(draws.map((d) => d.date)), [draws])
@@ -116,9 +123,10 @@ export default function App() {
             <div className="empty-hero">
               <h2>Bring your draw history, get a transparent prediction engine.</h2>
               <p>
-                Import a CSV or Excel file of past results (date, day of week, five numbers). Pattern Lab mines frequency,
-                recency, gaps, pairs, follower and weekday patterns — then walk-forward backtests every signal and weights
-                the ensemble by what has actually predicted well in <em>your</em> data.
+                Import a CSV or Excel file of past results (date, day of week, then the numbers — 5- and 6-number games are
+                auto-detected). Pattern Lab mines frequency, recency, gaps, pairs, follower and weekday patterns — then
+                walk-forward backtests every signal, predicting each past draw as if it hadn't happened yet, and weights
+                the ensemble by what has actually predicted well in <em>your</em> data. Every new result you add retrains it.
               </p>
               <div className="empty-actions">
                 <button className="btn primary" onClick={() => setDialog('import')}>Import CSV / Excel</button>
@@ -144,6 +152,7 @@ export default function App() {
             <div className={`grid ${computing ? 'stale' : ''}`}>
               <PredictionPanel res={result} />
               <RankingTable res={result} />
+              <PredictionLog res={result} />
               <HotColdOverdue res={result} />
               <DowPanel res={result} />
               <PairsPanel res={result} />
@@ -190,6 +199,7 @@ export default function App() {
         open={dialog === 'import'}
         onClose={() => setDialog('')}
         hasExisting={hasData}
+        expectedSize={settings.drawSize}
         onImport={handleImport}
       />
       <AddResultDialog
@@ -197,6 +207,7 @@ export default function App() {
         onClose={() => setDialog('')}
         defaultDate={result?.ok ? result.nextDate : ''}
         poolMax={settings.poolMax > 0 ? settings.poolMax : result?.ok ? result.K : 0}
+        drawSize={result?.ok ? result.drawSize : detectedSize}
         existingDates={existingDates}
         onAdd={handleAdd}
       />
@@ -205,6 +216,7 @@ export default function App() {
         onClose={() => setDialog('')}
         settings={settings}
         detectedPool={detectedPool}
+        detectedSize={detectedSize}
         onSave={(s) => { setSettings(s); setDialog('') }}
         onClearAll={() => { setDraws([]); setSettings(DEFAULT_SETTINGS); setDialog('') }}
       />

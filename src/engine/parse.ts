@@ -5,7 +5,12 @@ export interface ParseOutcome {
   draws: Draw[]
   errors: string[]
   warnings: string[]
+  /** Numbers per draw detected (or enforced) for this batch */
+  drawSize: number
 }
+
+export const MIN_DRAW_SIZE = 4
+export const MAX_DRAW_SIZE = 10
 
 type Cell = string | number
 
@@ -76,19 +81,28 @@ function asInt(c: Cell): number | null {
   return Number(s)
 }
 
+interface PendingRow {
+  line: number
+  iso: string
+  dow: number
+  dowMismatch: boolean
+  numerics: number[]
+}
+
 /**
  * Interpret rows of cells as draw history.
- * Expected shape: Date | [Day of week] | N1 | N2 | N3 | N4 | N5 [| extra ignored]
- * Column order is detected per file; day-of-week column is optional.
+ * Expected shape: Date | [Day of week] | N1 … Nk [| extra ignored]
+ * The numbers-per-draw count is auto-detected (most common count across rows,
+ * 4–10) unless `expectedSize` pins it — useful when a file carries bonus balls.
  */
-export function rowsToDraws(rowsIn: Cell[][]): ParseOutcome {
+export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0): ParseOutcome {
   const errors: string[] = []
   const warnings: string[] = []
   let rows = rowsIn.filter((r) => r.some((c) => String(c).trim() !== ''))
-  if (rows.length === 0) return { draws: [], errors: ['No rows found in the file.'], warnings }
+  if (rows.length === 0) return { draws: [], errors: ['No rows found in the file.'], warnings, drawSize: 0 }
 
   if (isHeaderRow(rows[0])) rows = rows.slice(1)
-  if (rows.length === 0) return { draws: [], errors: ['Only a header row was found.'], warnings }
+  if (rows.length === 0) return { draws: [], errors: ['Only a header row was found.'], warnings, drawSize: 0 }
 
   // Decide day-first vs month-first by scanning ambiguous triples across the file
   let dayFirst = false
@@ -112,11 +126,9 @@ export function rowsToDraws(rowsIn: Cell[][]): ParseOutcome {
     }
   }
 
-  const draws: Draw[] = []
-  const seen = new Map<string, string>() // dateKey+numbers -> first line
-  let ignoredExtraCols = false
+  // Pass 1: extract date, optional day word, and every numeric cell per row
+  const pending: PendingRow[] = []
   let dowMismatches = 0
-
   rows.forEach((cells, idx) => {
     const line = idx + 1
     const date = parseDateToken(cells[0] ?? '', dayFirst)
@@ -125,61 +137,99 @@ export function rowsToDraws(rowsIn: Cell[][]): ParseOutcome {
       return
     }
     let rest = cells.slice(1)
-    if (rest.length > 0 && isDowWord(rest[0])) rest = rest.slice(1)
-
-    const nums: number[] = []
+    let dowMismatch = false
+    const iso = isoKey(date.y, date.m, date.d)
+    const dow = dowOf(iso)
+    if (rest.length > 0 && isDowWord(rest[0])) {
+      const word = String(rest[0]).trim().toLowerCase().slice(0, 3)
+      const expect = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][dow]
+      if (word !== expect) dowMismatch = true
+      rest = rest.slice(1)
+    }
+    const numerics: number[] = []
     for (const c of rest) {
       if (String(c).trim() === '') continue
       const n = asInt(c)
       if (n === null) {
-        if (nums.length >= 5) { ignoredExtraCols = true; continue }
-        errors.push(`Row ${line}: "${String(c)}" is not a whole number.`)
-        return
+        if (numerics.length === 0) {
+          errors.push(`Row ${line}: "${String(c)}" is not a whole number.`)
+          return
+        }
+        continue // trailing text columns are ignored
       }
-      if (nums.length < 5) nums.push(n)
-      else ignoredExtraCols = true
+      if (numerics.length < MAX_DRAW_SIZE + 2) numerics.push(n)
     }
-    if (nums.length !== 5) {
-      errors.push(`Row ${line}: found ${nums.length} numbers, need exactly 5.`)
-      return
-    }
-    if (nums.some((n) => n < 1 || n > 999)) {
-      errors.push(`Row ${line}: numbers must be between 1 and 999.`)
-      return
-    }
-    if (new Set(nums).size !== 5) {
-      errors.push(`Row ${line}: duplicate number within the draw (${nums.join(', ')}).`)
-      return
-    }
-
-    const iso = isoKey(date.y, date.m, date.d)
-    const dow = dowOf(iso)
-    if (cells.length > 1 && isDowWord(cells[1])) {
-      const word = String(cells[1]).trim().toLowerCase().slice(0, 3)
-      const expect = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][dow]
-      if (word !== expect) dowMismatches++
-    }
-
-    const key = `${iso}|${[...nums].sort((a, b) => a - b).join(',')}`
-    if (seen.has(key)) {
-      warnings.push(`Row ${line}: duplicate of an earlier row for ${iso} — skipped.`)
-      return
-    }
-    seen.set(key, iso)
-    draws.push({ date: iso, dow, numbers: nums, sorted: [...nums].sort((a, b) => a - b) })
+    pending.push({ line, iso, dow, dowMismatch, numerics })
+    if (dowMismatch) dowMismatches++
   })
 
-  if (ignoredExtraCols) warnings.push('Extra columns beyond the first five numbers were ignored (e.g. a bonus ball).')
+  if (pending.length === 0) {
+    return { draws: [], errors, warnings, drawSize: 0 }
+  }
+
+  // Determine numbers-per-draw: explicit override, else the most common count
+  let drawSize = expectedSize
+  if (drawSize <= 0) {
+    const countFreq = new Map<number, number>()
+    for (const p of pending) {
+      const c = Math.min(p.numerics.length, MAX_DRAW_SIZE)
+      countFreq.set(c, (countFreq.get(c) ?? 0) + 1)
+    }
+    let bestCount = 0, bestFreq = -1
+    for (const [c, f] of countFreq) {
+      if (f > bestFreq || (f === bestFreq && c > bestCount)) { bestCount = c; bestFreq = f }
+    }
+    drawSize = bestCount
+  }
+  if (drawSize < MIN_DRAW_SIZE || drawSize > MAX_DRAW_SIZE) {
+    errors.push(`Rows carry ${drawSize} numbers — supported games have ${MIN_DRAW_SIZE}–${MAX_DRAW_SIZE} numbers per draw.`)
+    return { draws: [], errors, warnings, drawSize: 0 }
+  }
+
+  // Pass 2: validate each row against the draw size
+  const draws: Draw[] = []
+  const seen = new Set<string>()
+  let ignoredExtraCols = 0
+  let duplicates = 0
+  for (const p of pending) {
+    if (p.numerics.length < drawSize) {
+      errors.push(`Row ${p.line}: found ${p.numerics.length} numbers, need ${drawSize}.`)
+      continue
+    }
+    if (p.numerics.length > drawSize) ignoredExtraCols++
+    const nums = p.numerics.slice(0, drawSize)
+    if (nums.some((n) => n < 1 || n > 999)) {
+      errors.push(`Row ${p.line}: numbers must be between 1 and 999.`)
+      continue
+    }
+    if (new Set(nums).size !== drawSize) {
+      errors.push(`Row ${p.line}: duplicate number within the draw (${nums.join(', ')}).`)
+      continue
+    }
+    const sorted = [...nums].sort((a, b) => a - b)
+    const key = `${p.iso}|${sorted.join(',')}`
+    if (seen.has(key)) {
+      duplicates++
+      continue
+    }
+    seen.add(key)
+    draws.push({ date: p.iso, dow: p.dow, numbers: nums, sorted })
+  }
+
+  if (ignoredExtraCols > 0) {
+    warnings.push(`${ignoredExtraCols} row(s) had extra number columns beyond the first ${drawSize} — ignored (e.g. a bonus ball). If that's wrong, set "Numbers per draw" in Settings and re-import.`)
+  }
+  if (duplicates > 0) warnings.push(`${duplicates} duplicate row(s) skipped.`)
   if (dowMismatches > 0) {
     warnings.push(`${dowMismatches} row(s) had a day-of-week label that does not match the date; the date wins.`)
   }
 
   draws.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-  return { draws, errors, warnings }
+  return { draws, errors, warnings, drawSize }
 }
 
-export function parseDelimitedText(text: string): ParseOutcome {
-  return rowsToDraws(splitDelimited(text))
+export function parseDelimitedText(text: string, expectedSize = 0): ParseOutcome {
+  return rowsToDraws(splitDelimited(text), expectedSize)
 }
 
 /** Merge new draws into existing history, skipping exact duplicates. */
@@ -200,7 +250,8 @@ export function mergeDraws(existing: Draw[], incoming: Draw[]): { merged: Draw[]
 
 /** Serialize history back to CSV for export. */
 export function drawsToCsv(draws: Draw[]): string {
-  const head = 'Date,Day of Week,Number 1,Number 2,Number 3,Number 4,Number 5'
+  const n = draws.length > 0 ? draws[0].numbers.length : 5
+  const head = ['Date', 'Day of Week', ...Array.from({ length: n }, (_, i) => `Number ${i + 1}`)].join(',')
   const dows = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
   const lines = draws.map((d) => `${d.date},${dows[d.dow]},${d.numbers.join(',')}`)
   return [head, ...lines].join('\n')

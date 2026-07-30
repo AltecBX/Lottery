@@ -31,7 +31,7 @@ export function overdueList(state: HistoryState): OverdueEntry[] {
 export function topPairs(state: HistoryState, limit = 15): PairEntry[] {
   const S = state.K + 1
   const n = Math.max(1, state.n)
-  const corr = (4 * state.K) / (5 * (state.K - 1))
+  const corr = ((state.D - 1) * state.K) / (state.D * (state.K - 1))
   const out: PairEntry[] = []
   for (let a = 1; a <= state.K; a++)
     for (let b = a + 1; b <= state.K; b++) {
@@ -105,7 +105,7 @@ export function currentStreaks(state: HistoryState): StreakEntry[] {
 export function positionProfiles(state: HistoryState): PositionProfile[] {
   const S = state.K + 1
   const out: PositionProfile[] = []
-  for (let p = 0; p < 5; p++) {
+  for (let p = 0; p < state.D; p++) {
     const hist: number[] = []
     let total = 0
     for (let i = 1; i <= state.K; i++) {
