@@ -3,6 +3,12 @@ import type { Draw, Settings } from './engine/types.ts'
 import { DEFAULT_SETTINGS } from './engine/types.ts'
 import { mergeDraws } from './engine/parse.ts'
 import { generateSampleDraws } from './engine/sample.ts'
+import { fetchOfficialResults, type SyncKey } from './engine/sync.ts'
+import {
+  createGame, daysSinceLastDraw, migrateLegacy, OFFICIAL_GAMES,
+  type GameData, type GamesState,
+} from './engine/games.ts'
+import { formatDate } from './engine/dates.ts'
 import { useEngine } from './hooks/useEngine.ts'
 import { useLocalStorage, useTheme } from './hooks/useLocalStorage.ts'
 import { PredictionPanel } from './components/PredictionPanel.tsx'
@@ -20,6 +26,7 @@ import { RealityPanel } from './components/RealityPanel.tsx'
 import { InspectorPanel } from './components/InspectorPanel.tsx'
 import { TicketLab } from './components/TicketLab.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
+import { AddGameDialog } from './components/AddGameDialog.tsx'
 
 const NAV = [
   ['prediction', 'Prediction'],
@@ -38,16 +45,75 @@ const NAV = [
   ['history', 'History'],
 ] as const
 
+const EMPTY_DRAWS: Draw[] = []
+
+/** Read the multi-game state, migrating pre-multi-game storage on first run. */
+function loadInitialGames(): GamesState {
+  try {
+    const raw = window.localStorage.getItem('patternlab.games.v1')
+    if (raw) return JSON.parse(raw) as GamesState
+  } catch { /* fall through to migration */ }
+  try {
+    const oldDraws = window.localStorage.getItem('patternlab.draws.v1')
+    const oldSettings = window.localStorage.getItem('patternlab.settings.v1')
+    const migrated = migrateLegacy(
+      oldDraws ? (JSON.parse(oldDraws) as Draw[]) : null,
+      oldSettings ? (JSON.parse(oldSettings) as Settings) : null,
+    )
+    if (migrated) return migrated
+  } catch { /* corrupted legacy data — start fresh */ }
+  return { games: [], activeId: '' }
+}
+
 export default function App() {
-  const [draws, setDraws] = useLocalStorage<Draw[]>('patternlab.draws.v1', [])
-  const [storedSettings, setSettings] = useLocalStorage<Settings>('patternlab.settings.v1', DEFAULT_SETTINGS)
-  // Older stored settings may predate newer fields — always merge over defaults
-  const settings = useMemo(() => ({ ...DEFAULT_SETTINGS, ...storedSettings }), [storedSettings])
+  const initial = useMemo(loadInitialGames, [])
+  const [gamesState, setGamesState] = useLocalStorage<GamesState>('patternlab.games.v1', initial)
   const [themeChoice, cycleTheme] = useTheme()
-  const [dialog, setDialog] = useState<'' | 'import' | 'add' | 'settings'>('')
+  const [dialog, setDialog] = useState<'' | 'import' | 'add' | 'settings' | 'addgame'>('')
   const [flash, setFlash] = useState('')
+  const [syncing, setSyncing] = useState(false)
+
+  const games = gamesState.games
+  const activeGame: GameData | undefined = games.find((g) => g.id === gamesState.activeId) ?? games[0]
+  const draws = activeGame?.draws ?? EMPTY_DRAWS
+  const settings = useMemo(
+    () => ({ ...DEFAULT_SETTINGS, ...(activeGame?.settings ?? {}) }),
+    [activeGame?.settings],
+  )
 
   const { result, computing } = useEngine(draws, settings)
+
+  const say = (msg: string) => {
+    setFlash(msg)
+    window.setTimeout(() => setFlash(''), 4600)
+  }
+
+  const setActiveId = useCallback((id: string) => {
+    setGamesState((s) => ({ ...s, activeId: id }))
+  }, [setGamesState])
+
+  const updateGame = useCallback((id: string, fn: (g: GameData) => GameData) => {
+    setGamesState((s) => ({ ...s, games: s.games.map((g) => (g.id === id ? fn(g) : g)) }))
+  }, [setGamesState])
+
+  const updateActiveDraws = useCallback((fn: (prev: Draw[]) => Draw[]) => {
+    setGamesState((s) => {
+      const active = s.games.find((x) => x.id === s.activeId) ?? s.games[0]
+      if (!active) return s
+      return { ...s, games: s.games.map((g) => (g.id === active.id ? { ...g, draws: fn(g.draws) } : g)) }
+    })
+  }, [setGamesState])
+
+  const updateActiveSettings = useCallback((patch: Partial<Settings>) => {
+    setGamesState((s) => {
+      const active = s.games.find((x) => x.id === s.activeId) ?? s.games[0]
+      if (!active) return s
+      return {
+        ...s,
+        games: s.games.map((g) => (g.id === active.id ? { ...g, settings: { ...DEFAULT_SETTINGS, ...g.settings, ...patch } } : g)),
+      }
+    })
+  }, [setGamesState])
 
   const detectedPool = useMemo(() => {
     let m = 0
@@ -63,19 +129,88 @@ export default function App() {
     return m
   }, [draws])
 
-  const trimToCurrentEra = useCallback((cutoffDate: string, affected: number) => {
-    if (!window.confirm(`Remove the ${affected.toLocaleString()} draws from before ${cutoffDate} (the old number pool)? Export a CSV first if you want a backup.`)) return
-    setDraws((prev) => prev.filter((d) => d.date >= cutoffDate))
-    say('Trimmed to the current era — model retrained on the modern pool only.')
-  }, [setDraws])
+  const existingDates = useMemo(() => new Set(draws.map((d) => d.date)), [draws])
+  const hasData = draws.length > 0
 
-  const say = (msg: string) => {
-    setFlash(msg)
-    window.setTimeout(() => setFlash(''), 4200)
-  }
+  /** Fetch a game's official history and merge any new draws in. */
+  const syncGame = useCallback(async (gameId: string, silentWhenCurrent = false) => {
+    const game = gamesState.games.find((g) => g.id === gameId)
+    if (!game?.syncKey) return
+    setSyncing(true)
+    try {
+      const outcome = await fetchOfficialResults(game.syncKey)
+      if (outcome.draws.length === 0) {
+        say('The official source returned no rows — try again later.')
+        return
+      }
+      // Merge outside the state updater: updaters run at commit time, so a
+      // count captured inside one is not readable here.
+      const merged = mergeDraws(game.draws, outcome.draws)
+      updateGame(gameId, (g) => ({ ...g, draws: merged.merged }))
+      if (merged.added > 0) say(`${game.name}: ${merged.added} new draw${merged.added === 1 ? '' : 's'} added — model retrained.`)
+      else if (!silentWhenCurrent) say(`${game.name} is already up to date.`)
+    } catch (err) {
+      say(`Sync failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSyncing(false)
+    }
+  }, [gamesState.games, updateGame])
+
+  /** One-tap official game setup (or switch + refresh, if it already exists). */
+  const setupOfficial = useCallback(async (key: SyncKey) => {
+    const existing = gamesState.games.find((g) => g.syncKey === key)
+    if (existing) {
+      setActiveId(existing.id)
+      setDialog('')
+      void syncGame(existing.id, true)
+      return
+    }
+    const meta = OFFICIAL_GAMES.find((g) => g.key === key)!
+    setSyncing(true)
+    try {
+      const outcome = await fetchOfficialResults(key)
+      if (outcome.draws.length === 0) throw new Error('no rows returned')
+      const game: GameData = { ...createGame(key, meta.name, key), draws: outcome.draws }
+      setGamesState((s) => ({ games: [...s.games, game], activeId: game.id }))
+      setDialog('')
+      say(`${meta.name} set up — ${outcome.draws.length.toLocaleString()} official draws loaded.`)
+    } catch (err) {
+      say(`Could not set up ${meta.name}: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setSyncing(false)
+    }
+  }, [gamesState.games, setActiveId, setGamesState, syncGame])
+
+  const addCustomGame = useCallback((openImport: boolean) => {
+    const id = `custom-${Date.now()}`
+    const game = createGame(id, 'My game')
+    setGamesState((s) => ({ games: [...s.games, game], activeId: id }))
+    setDialog(openImport ? 'import' : '')
+  }, [setGamesState])
+
+  const addSampleGame = useCallback(() => {
+    const sample = generateSampleDraws()
+    const id = 'sample'
+    setGamesState((s) => {
+      const without = s.games.filter((g) => g.id !== id)
+      return { games: [...without, { ...createGame(id, 'Sample 6/49'), draws: sample }], activeId: id }
+    })
+    setDialog('')
+    say(`Sample game loaded — ${sample.length} synthetic draws with planted patterns.`)
+  }, [setGamesState])
+
+  const removeActiveGame = useCallback(() => {
+    if (!activeGame) return
+    setGamesState((s) => {
+      const games2 = s.games.filter((g) => g.id !== activeGame.id)
+      return { games: games2, activeId: games2[0]?.id ?? '' }
+    })
+    setDialog('')
+    say(`${activeGame.name} removed.`)
+  }, [activeGame, setGamesState])
 
   const handleImport = useCallback((incoming: Draw[], mode: 'replace' | 'append') => {
-    setDraws((prev) => {
+    updateActiveDraws((prev) => {
       if (mode === 'replace') return incoming
       const { merged, added, skipped } = mergeDraws(prev, incoming)
       window.setTimeout(() => say(`Appended ${added} draws${skipped ? ` (${skipped} duplicates skipped)` : ''}.`), 0)
@@ -83,26 +218,26 @@ export default function App() {
     })
     if (mode === 'replace') say(`Imported ${incoming.length.toLocaleString()} draws.`)
     setDialog('')
-  }, [setDraws])
+  }, [updateActiveDraws])
 
   const handleAdd = useCallback((draw: Draw) => {
-    setDraws((prev) => mergeDraws(prev, [draw]).merged)
+    updateActiveDraws((prev) => mergeDraws(prev, [draw]).merged)
     setDialog('')
-    say(`Added ${draw.date} — model retrained on ${draws.length + 1} draws.`)
-  }, [setDraws, draws.length])
+    say(`Added ${draw.date} — model retrained.`)
+  }, [updateActiveDraws])
 
   const handleDelete = useCallback((draw: Draw) => {
-    setDraws((prev) => prev.filter((d) => !(d.date === draw.date && d.sorted.join(',') === draw.sorted.join(','))))
-  }, [setDraws])
+    updateActiveDraws((prev) => prev.filter((d) => !(d.date === draw.date && d.sorted.join(',') === draw.sorted.join(','))))
+  }, [updateActiveDraws])
 
-  const loadSample = () => {
-    const sample = generateSampleDraws()
-    setDraws(sample)
-    say(`Sample dataset loaded — ${sample.length} synthetic 6-number draws with planted patterns to explore.`)
-  }
+  const trimToCurrentEra = useCallback((cutoffDate: string, affected: number) => {
+    if (!window.confirm(`Remove the ${affected.toLocaleString()} draws from before ${cutoffDate} (the old number pool)? Export a CSV first if you want a backup.`)) return
+    updateActiveDraws((prev) => prev.filter((d) => d.date >= cutoffDate))
+    say('Trimmed to the current era — model retrained on the modern pool only.')
+  }, [updateActiveDraws])
 
-  const existingDates = useMemo(() => new Set(draws.map((d) => d.date)), [draws])
-  const hasData = draws.length > 0
+  const staleDays = activeGame?.syncKey && hasData ? daysSinceLastDraw(activeGame, Date.now()) : 0
+  const showStaleNudge = !!activeGame?.syncKey && hasData && staleDays > 4
 
   return (
     <div className="app">
@@ -122,12 +257,33 @@ export default function App() {
                 <span className="sub">number prediction laboratory</span>
               </div>
             </div>
+            {games.length > 0 && (
+              <div className="game-tabs" role="tablist" aria-label="Games">
+                {games.map((g) => (
+                  <button
+                    key={g.id}
+                    role="tab"
+                    aria-selected={g.id === activeGame?.id}
+                    className={g.id === activeGame?.id ? 'on' : ''}
+                    onClick={() => setActiveId(g.id)}
+                  >
+                    {g.name}
+                  </button>
+                ))}
+                <button className="add" title="Add game" onClick={() => setDialog('addgame')}>+</button>
+              </div>
+            )}
             <div className="header-actions">
+              {activeGame?.syncKey && (
+                <button className="btn" onClick={() => void syncGame(activeGame.id)} disabled={syncing} title="Fetch the latest official results">
+                  ⟳ Sync
+                </button>
+              )}
               <button className="btn ghost" onClick={cycleTheme} title="Theme">
                 {themeChoice === 'auto' ? '◐ Auto' : themeChoice === 'dark' ? '● Dark' : '○ Light'}
               </button>
-              <button className="btn" onClick={() => setDialog('settings')}>Settings</button>
-              <button className="btn" onClick={() => setDialog('import')}>Import</button>
+              <button className="btn" onClick={() => setDialog('settings')} disabled={!activeGame}>Settings</button>
+              <button className="btn" onClick={() => setDialog('import')} disabled={!activeGame}>Import</button>
               <button className="btn primary" onClick={() => setDialog('add')} disabled={!hasData}>+ Add result</button>
             </div>
           </div>
@@ -143,18 +299,35 @@ export default function App() {
 
       <main className="main">
         <div className="container">
-          {!hasData && (
+          {games.length === 0 && (
             <div className="empty-hero">
-              <h2>Bring your draw history, get a transparent prediction engine.</h2>
+              <h2>Track your games. Understand every number. Stay honest about the odds.</h2>
               <p>
-                Import a CSV or Excel file of past results (date, day of week, then the numbers — 5- and 6-number games are
-                auto-detected). Pattern Lab mines frequency, recency, gaps, pairs, follower and weekday patterns — then
-                walk-forward backtests every signal, predicting each past draw as if it hadn't happened yet, and weights
-                the ensemble by what has actually predicted well in <em>your</em> data. Every new result you add retrains it.
+                Set up Powerball and Mega Millions with one tap — Pattern Lab downloads the full official history, keeps it
+                synced, and runs a transparent, self-testing statistical engine over each game separately: rankings,
+                calibrated probabilities, backtests, and a reality check that tells you exactly how much (or little) any
+                pattern is worth.
               </p>
               <div className="empty-actions">
-                <button className="btn primary" onClick={() => setDialog('import')}>Import CSV / Excel</button>
-                <button className="btn" onClick={loadSample}>Explore with sample data</button>
+                {OFFICIAL_GAMES.map((g) => (
+                  <button key={g.key} className="btn primary" disabled={syncing} onClick={() => void setupOfficial(g.key)}>
+                    ⟳ Set up {g.name}
+                  </button>
+                ))}
+                <button className="btn" onClick={() => addCustomGame(true)}>Import a file</button>
+                <button className="btn" onClick={addSampleGame}>Explore with sample data</button>
+              </div>
+              {syncing && <p style={{ marginTop: 16 }} className="hint">Downloading official history…</p>}
+            </div>
+          )}
+
+          {games.length > 0 && !hasData && (
+            <div className="empty-hero">
+              <h2>{activeGame?.name}: no draws yet.</h2>
+              <p>Import a file or paste results to start analyzing this game.</p>
+              <div className="empty-actions">
+                <button className="btn primary" onClick={() => setDialog('import')}>Import results</button>
+                <button className="btn danger" onClick={removeActiveGame}>Remove this game</button>
               </div>
             </div>
           )}
@@ -168,12 +341,23 @@ export default function App() {
                   <button className="btn" onClick={() => setDialog('settings')}>Open settings</button>
                 </div>
               </div>
-              {draws.length > 0 && <HistoryTable draws={draws} onDelete={handleDelete} />}
+              {draws.length > 0 && <HistoryTable draws={draws} exportName={activeGame?.name ?? 'draws'} onDelete={handleDelete} />}
             </div>
           )}
 
           {hasData && result?.ok && (
             <div className={`grid ${computing ? 'stale' : ''}`}>
+              {showStaleNudge && (
+                <div className="notice era-banner">
+                  <div className="grow">
+                    <strong>New {activeGame!.name} results may be available</strong> — your newest saved draw is{' '}
+                    {formatDate(draws[draws.length - 1].date)}.
+                  </div>
+                  <button className="btn primary" onClick={() => void syncGame(activeGame!.id)} disabled={syncing}>
+                    ⟳ Sync now
+                  </button>
+                </div>
+              )}
               {result.eraNotice && (
                 <div className="notice warn era-banner">
                   <div className="grow">
@@ -191,8 +375,8 @@ export default function App() {
               <RealityPanel res={result} />
               <RankingTable res={result} />
               <PredictionLog res={result} />
-              <TicketLab key={`t${result.lastDate}-${result.drawCount}`} res={result} draws={draws} />
-              <InspectorPanel res={result} draws={draws} />
+              <TicketLab key={`t-${activeGame?.id}-${result.lastDate}-${result.drawCount}`} res={result} draws={draws} />
+              <InspectorPanel key={`i-${activeGame?.id}`} res={result} draws={draws} />
               <HotColdOverdue res={result} />
               <DowPanel res={result} />
               <PairsPanel res={result} />
@@ -200,11 +384,11 @@ export default function App() {
               <TrendsPanel
                 res={result}
                 settings={settings}
-                onWindowChange={(w) => setSettings((s) => ({ ...s, exploreWindow: w }))}
+                onWindowChange={(w) => updateActiveSettings({ exploreWindow: w })}
               />
               <SimilarPanel res={result} />
               <BacktestPanel res={result} />
-              <HistoryTable draws={draws} onDelete={handleDelete} />
+              <HistoryTable draws={draws} exportName={activeGame?.name ?? 'draws'} onDelete={handleDelete} />
             </div>
           )}
 
@@ -229,10 +413,10 @@ export default function App() {
         </div>
       </footer>
 
-      {computing && hasData && (
-        <div className="computing"><span className="spinner" /> Recalculating…</div>
+      {(computing || syncing) && hasData && (
+        <div className="computing"><span className="spinner" /> {syncing ? 'Syncing official results…' : 'Recalculating…'}</div>
       )}
-      {flash && !computing && (
+      {flash && !computing && !syncing && (
         <div className="computing">✓ {flash}</div>
       )}
 
@@ -259,11 +443,22 @@ export default function App() {
         open={dialog === 'settings'}
         onClose={() => setDialog('')}
         settings={settings}
+        gameName={activeGame?.name ?? ''}
         detectedPool={detectedPool}
         detectedSize={detectedSize}
         detectedSpecialMax={detectedSpecialMax}
-        onSave={(s) => { setSettings(s); setDialog('') }}
-        onClearAll={() => { setDraws([]); setSettings(DEFAULT_SETTINGS); setDialog('') }}
+        onSave={(s) => { updateActiveSettings(s); setDialog('') }}
+        onClearAll={() => { updateActiveDraws(() => []); setDialog('') }}
+        onRemoveGame={removeActiveGame}
+      />
+      <AddGameDialog
+        open={dialog === 'addgame'}
+        onClose={() => setDialog('')}
+        existingKeys={games.map((g) => g.syncKey).filter((k): k is SyncKey => !!k)}
+        busy={syncing}
+        onOfficial={(key) => void setupOfficial(key)}
+        onImportFile={() => addCustomGame(true)}
+        onSample={addSampleGame}
       />
     </div>
   )

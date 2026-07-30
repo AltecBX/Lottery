@@ -297,15 +297,17 @@ export function AddResultDialog({ open, onClose, defaultDate, poolMax, drawSize,
 
 /* ---------------- Settings ---------------- */
 
-export function SettingsDialog({ open, onClose, settings, detectedPool, detectedSize, detectedSpecialMax, onSave, onClearAll }: {
+export function SettingsDialog({ open, onClose, settings, gameName, detectedPool, detectedSize, detectedSpecialMax, onSave, onClearAll, onRemoveGame }: {
   open: boolean
   onClose: () => void
   settings: Settings
+  gameName: string
   detectedPool: number
   detectedSize: number
   detectedSpecialMax: number
   onSave: (s: Settings) => void
   onClearAll: () => void
+  onRemoveGame: () => void
 }) {
   const [poolMax, setPoolMax] = useState('')
   const [nextDate, setNextDate] = useState('')
@@ -402,14 +404,21 @@ export function SettingsDialog({ open, onClose, settings, detectedPool, detected
       </div>
       <div className="field">
         <label>Danger zone</label>
-        <div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
           <button
             className="btn danger"
-            onClick={() => { if (window.confirm('Delete ALL stored draws and start over?')) onClearAll() }}
+            onClick={() => { if (window.confirm(`Delete all stored draws for ${gameName}?`)) onClearAll() }}
           >
-            Clear all data
+            Clear {gameName || 'this game'}'s data
+          </button>
+          <button
+            className="btn danger"
+            onClick={() => { if (window.confirm(`Remove the ${gameName} game entirely (draws and settings)?`)) onRemoveGame() }}
+          >
+            Remove this game
           </button>
         </div>
+        <span className="help">Settings above apply to {gameName || 'the active game'} only — every game keeps its own.</span>
       </div>
     </Dialog>
   )
