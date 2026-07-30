@@ -6,7 +6,7 @@ import { SectionCard, Ball } from './shared.tsx'
 
 const PAGE = 12
 
-export function HistoryTable({ draws, onDelete }: { draws: Draw[]; onDelete: (draw: Draw) => void }) {
+export function HistoryTable({ draws, exportName, onDelete }: { draws: Draw[]; exportName: string; onDelete: (draw: Draw) => void }) {
   const [page, setPage] = useState(0)
   const newestFirst = [...draws].reverse()
   const pages = Math.max(1, Math.ceil(newestFirst.length / PAGE))
@@ -18,7 +18,7 @@ export function HistoryTable({ draws, onDelete }: { draws: Draw[]; onDelete: (dr
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'draw-history.csv'
+    a.download = `${exportName.toLowerCase().replace(/[^a-z0-9]+/g, '-') || 'draws'}-history.csv`
     a.click()
     URL.revokeObjectURL(url)
   }

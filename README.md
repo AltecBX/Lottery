@@ -5,6 +5,11 @@ numbers — 5- and 6-number games are auto-detected, 4–10 supported, with or w
 discovers the patterns hiding in it, and ranks the most probable numbers for the **next** draw — with every
 prediction explained, probability-calibrated, and honestly stress-tested by a walk-forward backtest.
 
+**Track multiple games side by side.** Powerball and Mega Millions set up with one tap — the full official
+history downloads automatically from New York State's open-data API, each game keeps its own history, settings,
+and model, and a header **⟳ Sync** button (plus a stale-results nudge) pulls new draws whenever you visit.
+Custom games (any 4–10 numbers, with or without a bonus ball) can be added from files alongside them.
+
 **The model is always self-testing.** For every draw in your history it re-predicts that draw using only the draws
 before it, scores itself against what actually hit, and re-fits its signal weights — so each new result you add
 makes the next prediction a little better informed. The Prediction Log panel shows this draw-by-draw record.

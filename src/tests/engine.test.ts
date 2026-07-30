@@ -7,6 +7,7 @@ import { runEngine } from '../engine/engine.ts'
 import { generateSampleDraws } from '../engine/sample.ts'
 import { choose, hitDistribution, jackpotOdds, matchOdds } from '../engine/odds.ts'
 import { parseSocrataRows } from '../engine/sync.ts'
+import { createGame, daysSinceLastDraw, migrateLegacy } from '../engine/games.ts'
 import { DEFAULT_SETTINGS } from '../engine/types.ts'
 import type { Draw } from '../engine/types.ts'
 
@@ -292,6 +293,34 @@ describe('official results sync parsing', () => {
     ], 'megamillions')
     expect(out.draws).toHaveLength(1)
     expect(out.draws[0]).toMatchObject({ sorted: [10, 20, 30, 40, 50], special: 7 })
+  })
+})
+
+describe('multi-game model', () => {
+  it('migrates a legacy Powerball-shaped history with sync enabled', () => {
+    const draws: Draw[] = [
+      { ...D('2026-07-27', [6, 26, 46, 58, 65]), special: 25 },
+      { ...D('2026-07-25', [3, 4, 24, 36, 47]), special: 17 },
+    ]
+    const out = migrateLegacy(draws, DEFAULT_SETTINGS)
+    expect(out).not.toBeNull()
+    expect(out!.games).toHaveLength(1)
+    expect(out!.games[0]).toMatchObject({ name: 'Powerball', syncKey: 'powerball' })
+    expect(out!.activeId).toBe(out!.games[0].id)
+  })
+  it('migrates an unknown-shaped history without a sync source', () => {
+    const draws: Draw[] = [D('2026-07-27', [6, 26, 46, 58, 65, 12])]
+    const out = migrateLegacy(draws, null)
+    expect(out!.games[0].syncKey).toBeUndefined()
+    expect(out!.games[0].name).toBe('My game')
+  })
+  it('returns null with nothing to migrate, and creates clean games', () => {
+    expect(migrateLegacy(null, null)).toBeNull()
+    expect(migrateLegacy([], DEFAULT_SETTINGS)).toBeNull()
+    const g = createGame('powerball', 'Powerball', 'powerball')
+    expect(g.draws).toHaveLength(0)
+    expect(g.syncKey).toBe('powerball')
+    expect(daysSinceLastDraw(g, Date.now())).toBe(Infinity)
   })
 })
 
