@@ -1,24 +1,25 @@
 import type { BacktestPoint, BacktestSummary, Draw, SignalPerformance } from './types.ts'
 import { HistoryState } from './state.ts'
-import { computeRawSignals, SIGNAL_LABEL, SIGNAL_META, topIndices, zNormalize } from './signals.ts'
+import { computeRawSignals, computeSpecialRawSignals, SIGNAL_LABEL, signalKeys, SPECIAL_SIGNAL_KEYS, topIndices, zNormalize } from './signals.ts'
 
 export const MIN_HISTORY = 30
 
 export interface BacktestOutput {
   summary: BacktestSummary
-  /** Final learned weights keyed by signal — used for the live prediction */
+  /** Learned ensemble weights (used for the live prediction) */
   weights: Record<string, number>
-  /** Final per-signal skill (EMA of hits@10 above chance) */
-  skills: Record<string, number>
   /** Calibrated P(hit) for each predicted rank 1..K */
   rankHitRate: number[]
+  /** Bonus-ball learned weights (when the game has one) */
+  specialWeights: Record<string, number> | null
+  /** Bonus-ball calibrated P(hit) by predicted rank */
+  specialRankHitRate: number[] | null
 }
 
 /**
  * Convert per-signal skill estimates into ensemble weights.
  * Signals that do not beat chance get zero weight; positive skill is
- * sharpened (^1.5) so genuinely predictive signals dominate.
- * Early on (few evaluated draws) weights are blended toward uniform.
+ * sharpened (^2) so genuinely predictive signals dominate.
  */
 export function weightsFromSkills(
   keys: string[],
@@ -40,11 +41,12 @@ export function weightsFromSkills(
   }
   const uniform = 1 / keys.length
   // Trust the learned weights only when the best signal's edge is statistically
-  // meaningful: SE of the mean-hits metric shrinks with backtest size, and the
-  // edge must clear ~1.5 SE before any concentration begins (full at 4 SE).
+  // meaningful: SE of the mean-hits metric shrinks with backtest size. Because
+  // we take the max over ~18 (correlated) signals, the noise ceiling sits near
+  // 2.5 SE — concentration starts there and reaches full trust at 5 SE.
   // On random data max skill hovers inside the noise band, so weights stay uniform.
   const se = Math.sqrt(Math.max(0.05, chance10)) / Math.sqrt(Math.max(1, evaluated))
-  const trust = Math.max(0, Math.min(1, (maxSkill / se - 1.5) / 2.5))
+  const trust = Math.max(0, Math.min(1, (maxSkill / se - 2.0) / 2.5))
   const out: Record<string, number> = {}
   if (sum <= 1e-12) {
     for (const k of keys) out[k] = uniform
@@ -57,12 +59,9 @@ export function weightsFromSkills(
 /** Pool-adjacent-violators: make rank hit-rates non-increasing. */
 export function isotonicDecreasing(rates: number[], weights: number[]): number[] {
   const n = rates.length
-  const val = [...rates]
-  const w = [...weights]
-  const idx: number[] = [] // block end pointers
   const blocks: { v: number; w: number; len: number }[] = []
   for (let i = 0; i < n; i++) {
-    let cur = { v: val[i], w: w[i], len: 1 }
+    let cur = { v: rates[i], w: weights[i], len: 1 }
     while (blocks.length > 0 && blocks[blocks.length - 1].v < cur.v) {
       const prev = blocks.pop()!
       cur = {
@@ -75,27 +74,62 @@ export function isotonicDecreasing(rates: number[], weights: number[]): number[]
   }
   const out: number[] = []
   for (const b of blocks) for (let i = 0; i < b.len; i++) out.push(b.v)
-  void idx
   return out
 }
 
-export function runBacktest(draws: Draw[], K: number, usePosition: boolean): BacktestOutput {
+export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosition: boolean, specialKs = 0): BacktestOutput {
   const N = draws.length
-  const state = new HistoryState(K)
-  const chance5 = (5 * Math.min(5, K)) / K
-  const chance10 = (5 * Math.min(10, K)) / K
+  const D = drawSize
+  const state = new HistoryState(K, D)
+  const chancePick = (D * Math.min(D, K)) / K
+  const chance10 = (D * Math.min(10, K)) / K
+  const keysAll = signalKeys(usePosition)
 
-  const skills: Record<string, number> = {}
+  // Global skill state: recent (EMA) and lifetime, per signal
+  const emaG: Record<string, number> = {}
   const sumHits10: Record<string, number> = {}
   const evalCount: Record<string, number> = {}
   const emaLambda = Math.pow(0.5, 1 / 80)
 
-  let weights: Record<string, number> | null = null
+  /**
+   * A signal only earns weight if it beats chance BOTH recently (EMA) and over
+   * its lifetime — the min of the two kills signals that merely got lucky.
+   * (A per-weekday weight adaptation was evaluated and removed: it added no
+   * measurable accuracy on structured data but let same-weekday noise streaks
+   * concentrate weight on random data. Weekday structure is instead captured
+   * per-number by the freqDow / dowRecent / followerDow signals.)
+   */
+  const skillUsed = (): Record<string, number> => {
+    const out: Record<string, number> = {}
+    for (const k of keysAll) {
+      const lifetime = (evalCount[k] ?? 0) > 0 ? sumHits10[k] / evalCount[k] - chance10 : 0
+      out[k] = Math.min(emaG[k] ?? 0, lifetime)
+    }
+    return out
+  }
+
+  // Bonus-ball learner state (only used when specialKs > 0)
+  const sEma: Record<string, number> = {}
+  const sSum: Record<string, number> = {}
+  const sCount: Record<string, number> = {}
+  const sChance3 = specialKs > 0 ? Math.min(3, specialKs) / specialKs : 0
+  const sHitsAtRank = new Uint32Array(Math.max(1, specialKs + 1))
+  let sEvaluated = 0, sTop1 = 0, sTop3 = 0
+  const sEmaLambda = Math.pow(0.5, 1 / 80)
+  const sSkillUsed = (): Record<string, number> => {
+    const out: Record<string, number> = {}
+    for (const k of SPECIAL_SIGNAL_KEYS) {
+      const lifetime = (sCount[k] ?? 0) > 0 ? sSum[k] / sCount[k] - sChance3 : 0
+      out[k] = Math.min(sEma[k] ?? 0, lifetime)
+    }
+    return out
+  }
+
   const points: BacktestPoint[] = []
   const dowAgg = Array.from({ length: 7 }, () => ({ draws: 0, ens10: 0, base10: 0 }))
   const hitsAtRank = new Uint32Array(K + 1)
   let evaluated = 0
-  let ensSum5 = 0, ensSum10 = 0, baseSum5 = 0, baseSum10 = 0
+  let ensSumPick = 0, ensSum10 = 0, baseSumPick = 0, baseSum10 = 0
   let ens10AtLeast2 = 0
 
   for (let t = 0; t < N; t++) {
@@ -114,12 +148,10 @@ export function runBacktest(draws: Draw[], K: number, usePosition: boolean): Bac
         let h = 0
         for (const i of top10) if (actual.has(i)) h++
         sigHits[keys[s]] = h
-        sumHits10[keys[s]] = (sumHits10[keys[s]] ?? 0) + h
-        evalCount[keys[s]] = (evalCount[keys[s]] ?? 0) + 1
       }
 
       // Ensemble uses weights learned from draws BEFORE t only
-      if (!weights) weights = weightsFromSkills(keys, skills, 0, chance10)
+      const weights = weightsFromSkills(keys, skillUsed(), evaluated, chance10)
       const ens = new Float64Array(K + 1)
       for (let s = 0; s < keys.length; s++) {
         const w = weights[keys[s]] ?? 0
@@ -128,47 +160,86 @@ export function runBacktest(draws: Draw[], K: number, usePosition: boolean): Bac
         for (let i = 1; i <= K; i++) ens[i] += w * z[i]
       }
       const order = topIndices(ens, K, K)
-      let h5 = 0, h10 = 0
+      let hPick = 0, h10 = 0
       order.forEach((num, pos) => {
         if (actual.has(num)) {
           hitsAtRank[pos + 1]++
-          if (pos < 5) h5++
+          if (pos < D) hPick++
           if (pos < 10) h10++
         }
       })
 
       // Baseline: plain overall frequency
       const freqZ = zs[keys.indexOf('freqAll')]
-      const baseTop = topIndices(freqZ, K, Math.min(10, K))
-      let b5 = 0, b10 = 0
+      const baseTop = topIndices(freqZ, K, Math.min(Math.max(10, D), K))
+      let bPick = 0, b10 = 0
       baseTop.forEach((num, pos) => {
         if (actual.has(num)) {
-          if (pos < 5) b5++
-          b10++
+          if (pos < D) bPick++
+          if (pos < 10) b10++
         }
       })
 
       evaluated++
-      ensSum5 += h5; ensSum10 += h10; baseSum5 += b5; baseSum10 += b10
+      ensSumPick += hPick; ensSum10 += h10; baseSumPick += bPick; baseSum10 += b10
       if (h10 >= 2) ens10AtLeast2++
       dowAgg[target.dow].draws++
       dowAgg[target.dow].ens10 += h10
       dowAgg[target.dow].base10 += b10
-      points.push({ index: t, date: target.date, dow: target.dow, hits5: h5, hits10: h10, baselineHits5: b5, baselineHits10: b10 })
+      const point: BacktestPoint = {
+        index: t,
+        date: target.date,
+        dow: target.dow,
+        hitsPick: hPick,
+        hits10: h10,
+        baselineHitsPick: bPick,
+        baselineHits10: b10,
+        predictedTop: order.slice(0, Math.min(10, K)),
+        actual: [...target.sorted],
+      }
 
-      // Update skills AFTER evaluating (so this draw informs future weights only).
-      // A signal only earns weight if it beats chance BOTH recently (EMA) and over
-      // its lifetime — taking the min kills signals that merely got lucky lately.
+      // Bonus-ball self-test (own pool, own learned weights)
+      if (specialKs > 0 && target.special !== undefined && target.special >= 1 && target.special <= specialKs) {
+        const sRaws = computeSpecialRawSignals(state, target.dow, specialKs)
+        const sZs = sRaws.map((r) => zNormalize(r.raw, specialKs))
+        const sKeys = sRaws.map((r) => r.key)
+        const sSigHits: Record<string, number> = {}
+        for (let i = 0; i < sKeys.length; i++) {
+          const top3 = topIndices(sZs[i], specialKs, Math.min(3, specialKs))
+          sSigHits[sKeys[i]] = top3.includes(target.special) ? 1 : 0
+        }
+        const sWeights = weightsFromSkills(sKeys, sSkillUsed(), sEvaluated, sChance3)
+        const sEns = new Float64Array(specialKs + 1)
+        for (let i = 0; i < sKeys.length; i++) {
+          const w = sWeights[sKeys[i]] ?? 0
+          if (w <= 0) continue
+          for (let v = 1; v <= specialKs; v++) sEns[v] += w * sZs[i][v]
+        }
+        const sOrder = topIndices(sEns, specialKs, specialKs)
+        const rank = sOrder.indexOf(target.special)
+        if (rank >= 0) sHitsAtRank[rank + 1]++
+        if (rank === 0) sTop1++
+        if (rank >= 0 && rank < 3) sTop3++
+        sEvaluated++
+        point.specialTop = sOrder.slice(0, Math.min(3, specialKs))
+        point.specialActual = target.special
+        for (const k of sKeys) {
+          const excess = sSigHits[k] - sChance3
+          sEma[k] = sEma[k] === undefined ? excess : sEmaLambda * sEma[k] + (1 - sEmaLambda) * excess
+          sSum[k] = (sSum[k] ?? 0) + sSigHits[k]
+          sCount[k] = (sCount[k] ?? 0) + 1
+        }
+      }
+
+      points.push(point)
+
+      // Update skill state AFTER evaluating (this draw informs future weights only)
       for (const k of keys) {
         const excess = sigHits[k] - chance10
-        skills[k] = skills[k] === undefined ? excess : emaLambda * skills[k] + (1 - emaLambda) * excess
+        emaG[k] = emaG[k] === undefined ? excess : emaLambda * emaG[k] + (1 - emaLambda) * excess
+        sumHits10[k] = (sumHits10[k] ?? 0) + sigHits[k]
+        evalCount[k] = (evalCount[k] ?? 0) + 1
       }
-      const skillUsed: Record<string, number> = {}
-      for (const k of keys) {
-        const lifetime = sumHits10[k] / Math.max(1, evalCount[k]) - chance10
-        skillUsed[k] = Math.min(skills[k], lifetime)
-      }
-      weights = weightsFromSkills(keys, skillUsed, evaluated, chance10)
     }
     state.push(target)
   }
@@ -178,35 +249,54 @@ export function runBacktest(draws: Draw[], K: number, usePosition: boolean): Bac
   const rates: number[] = []
   const rateW: number[] = []
   for (let r = 1; r <= K; r++) {
-    rates.push((hitsAtRank[r] + M * (5 / K)) / (evaluated + M))
+    rates.push((hitsAtRank[r] + M * (D / K)) / (evaluated + M))
     rateW.push(1)
   }
-  const rankHitRate = evaluated > 0 ? isotonicDecreasing(rates, rateW) : Array.from({ length: K }, () => 5 / K)
+  const rankHitRate = evaluated > 0 ? isotonicDecreasing(rates, rateW) : Array.from({ length: K }, () => D / K)
 
-  const signals: SignalPerformance[] = Object.keys(sumHits10).map((k) => {
-    const meta = SIGNAL_LABEL[k]
-    const avg = sumHits10[k] / Math.max(1, evalCount[k])
-    return {
-      key: k,
-      label: meta?.label ?? k,
-      short: meta?.short ?? k,
-      description: meta?.description ?? '',
-      avgHits10: avg,
-      skill: avg - chance10,
-      weight: weights?.[k] ?? 0,
-      evaluated: evalCount[k],
+  const finalWeights = weightsFromSkills(keysAll, skillUsed(), evaluated, chance10)
+
+  // Bonus-ball final weights + rank calibration
+  let specialWeights: Record<string, number> | null = null
+  let specialRankHitRate: number[] | null = null
+  if (specialKs > 0) {
+    specialWeights = weightsFromSkills([...SPECIAL_SIGNAL_KEYS], sSkillUsed(), sEvaluated, sChance3)
+    const Ms = 25
+    const sRates: number[] = []
+    const sW: number[] = []
+    for (let r = 1; r <= specialKs; r++) {
+      sRates.push((sHitsAtRank[r] + Ms * (1 / specialKs)) / (sEvaluated + Ms))
+      sW.push(1)
     }
-  })
+    specialRankHitRate = sEvaluated > 0 ? isotonicDecreasing(sRates, sW) : Array.from({ length: specialKs }, () => 1 / specialKs)
+  }
+
+  const signals: SignalPerformance[] = keysAll
+    .filter((k) => (evalCount[k] ?? 0) > 0 || evaluated === 0)
+    .map((k) => {
+      const meta = SIGNAL_LABEL[k]
+      const avg = (evalCount[k] ?? 0) > 0 ? sumHits10[k] / evalCount[k] : 0
+      return {
+        key: k,
+        label: meta?.label ?? k,
+        short: meta?.short ?? k,
+        description: meta?.description ?? '',
+        avgHits10: avg,
+        skill: avg - chance10,
+        weight: finalWeights[k] ?? 0,
+        evaluated: evalCount[k] ?? 0,
+      }
+    })
   signals.sort((a, b) => b.weight - a.weight || b.skill - a.skill)
 
   const summary: BacktestSummary = {
     evaluated,
     minHistory: MIN_HISTORY,
-    chance5,
+    chancePick,
     chance10,
-    ensemble5: evaluated ? ensSum5 / evaluated : 0,
+    ensemblePick: evaluated ? ensSumPick / evaluated : 0,
     ensemble10: evaluated ? ensSum10 / evaluated : 0,
-    baseline5: evaluated ? baseSum5 / evaluated : 0,
+    baselinePick: evaluated ? baseSumPick / evaluated : 0,
     baseline10: evaluated ? baseSum10 / evaluated : 0,
     ens10AtLeast2: evaluated ? ens10AtLeast2 / evaluated : 0,
     points,
@@ -220,17 +310,18 @@ export function runBacktest(draws: Draw[], K: number, usePosition: boolean): Bac
       .filter((d) => d.draws > 0),
     signals,
     rankHitRate,
+    ...(specialKs > 0
+      ? {
+          special: {
+            evaluated: sEvaluated,
+            top1: sEvaluated ? sTop1 / sEvaluated : 0,
+            top3: sEvaluated ? sTop3 / sEvaluated : 0,
+            chance1: 1 / specialKs,
+            chance3: sChance3,
+          },
+        }
+      : {}),
   }
 
-  // With fewer than MIN_HISTORY draws the loop never evaluates, so no weights
-  // were learned — fall back to a uniform blend over the same signal set the
-  // live prediction will compute (never an empty map, which would zero out
-  // every signal and reduce the ranking to a numeric tie-break).
-  const finalWeights = weights ?? weightsFromSkills(
-    SIGNAL_META.map((m) => m.key).filter((k) => usePosition || k !== 'position'),
-    {},
-    0,
-    chance10,
-  )
-  return { summary, weights: finalWeights, skills, rankHitRate }
+  return { summary, weights: finalWeights, rankHitRate, specialWeights, specialRankHitRate }
 }

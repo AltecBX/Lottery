@@ -8,13 +8,29 @@ function pairLogLift(state: HistoryState, a: number, b: number): number {
   const n = Math.max(1, state.n)
   const pa = state.counts[a] / n
   const pb = state.counts[b] / n
-  const corr = (4 * state.K) / (5 * (state.K - 1)) // without-replacement correction
+  const D = state.D
+  const corr = ((D - 1) * state.K) / (D * (state.K - 1)) // without-replacement correction
   const expected = n * pa * pb * corr
   return Math.log((pc + 0.75) / (expected + 0.75))
 }
 
+/** Visit every k-combination of indices 0..n-1. */
+function forEachCombination(n: number, k: number, visit: (idx: number[]) => void): void {
+  const idx = Array.from({ length: k }, (_, i) => i)
+  if (k > n) return
+  for (;;) {
+    visit(idx)
+    // advance
+    let i = k - 1
+    while (i >= 0 && idx[i] === n - k + i) i--
+    if (i < 0) return
+    idx[i]++
+    for (let j = i + 1; j < k; j++) idx[j] = idx[j - 1] + 1
+  }
+}
+
 /**
- * Build ranked 5-number combinations from the strongest candidates.
+ * Build ranked combinations from the strongest candidates.
  * Combo score = member ensemble scores + pair-affinity bonus + shape plausibility
  * (sum and odd/even balance relative to what history actually produces).
  */
@@ -23,8 +39,10 @@ export function buildCombos(
   predictions: NumberPrediction[],
   maxCombos = 8,
 ): { best: ComboPrediction | null; alts: ComboPrediction[] } {
-  if (state.K < 5 || predictions.length < 5) return { best: null, alts: [] }
-  const cand = predictions.slice(0, Math.min(12, predictions.length))
+  const D = state.D
+  if (state.K < D || predictions.length < D) return { best: null, alts: [] }
+  const candCount = Math.min(D + 7, predictions.length) // C(12,5)=792, C(13,6)=1716
+  const cand = predictions.slice(0, candCount)
   const scoreOf = new Map(cand.map((p) => [p.number, p.score]))
   const probOf = new Map(cand.map((p) => [p.number, p.probability]))
   const nums = cand.map((p) => p.number)
@@ -33,58 +51,55 @@ export function buildCombos(
   const sumSd = Math.max(1, state.sumSd())
   const n = Math.max(1, state.n)
   let oddModeP = 0
-  for (let o = 0; o <= 5; o++) oddModeP = Math.max(oddModeP, (state.oddHist[o] + 1) / (n + 6))
+  for (let o = 0; o <= D; o++) oddModeP = Math.max(oddModeP, (state.oddHist[o] + 1) / (n + D + 1))
 
-  interface Scored { numbers: number[]; score: number; pairAvg: number; sumZ: number; oddBonus: number }
+  interface Scored { numbers: number[]; score: number; pairAvg: number; sumZ: number }
   const combos: Scored[] = []
-  const c = nums.length
-  for (let a = 0; a < c - 4; a++)
-    for (let b = a + 1; b < c - 3; b++)
-      for (let x = b + 1; x < c - 2; x++)
-        for (let y = x + 1; y < c - 1; y++)
-          for (let z = y + 1; z < c; z++) {
-            const set = [nums[a], nums[b], nums[x], nums[y], nums[z]]
-            let base = 0
-            for (const v of set) base += scoreOf.get(v) ?? 0
-            let pairSum = 0
-            for (let i = 0; i < 5; i++)
-              for (let j = i + 1; j < 5; j++) pairSum += pairLogLift(state, set[i], set[j])
-            const pairAvg = pairSum / 10
-            const total = set.reduce((s, v) => s + v, 0)
-            const sumZ = (total - sumMean) / sumSd
-            const odd = set.filter((v) => v % 2 === 1).length
-            const oddP = (state.oddHist[odd] + 1) / (n + 6)
-            const oddBonus = Math.log(oddP / oddModeP) // <= 0
-            const score = base + 0.3 * pairAvg - 0.06 * sumZ * sumZ + 0.25 * oddBonus
-            combos.push({ numbers: set.sort((p, q) => p - q), score, pairAvg, sumZ, oddBonus })
-          }
+  const pairsPerCombo = (D * (D - 1)) / 2
+  forEachCombination(nums.length, D, (idx) => {
+    const set = idx.map((i) => nums[i])
+    let base = 0
+    for (const v of set) base += scoreOf.get(v) ?? 0
+    let pairSum = 0
+    for (let i = 0; i < D; i++)
+      for (let j = i + 1; j < D; j++) pairSum += pairLogLift(state, set[i], set[j])
+    const pairAvg = pairSum / pairsPerCombo
+    const total = set.reduce((s, v) => s + v, 0)
+    const sumZ = (total - sumMean) / sumSd
+    const odd = set.filter((v) => v % 2 === 1).length
+    const oddP = (state.oddHist[odd] + 1) / (n + D + 1)
+    const oddBonus = Math.log(oddP / oddModeP) // <= 0
+    const score = base + 0.3 * pairAvg - 0.06 * sumZ * sumZ + 0.25 * oddBonus
+    combos.push({ numbers: [...set].sort((p, q) => p - q), score, pairAvg, sumZ })
+  })
 
   combos.sort((p, q) => q.score - p.score)
   const top = combos.slice(0, maxCombos)
+  if (top.length === 0) return { best: null, alts: [] }
   const best = top[0]
 
   const toPrediction = (cb: Scored): ComboPrediction => {
     const S = state.K + 1
     let bestPair: { a: number; b: number; count: number } | null = null
-    for (let i = 0; i < 5; i++)
-      for (let j = i + 1; j < 5; j++) {
+    for (let i = 0; i < D; i++)
+      for (let j = i + 1; j < D; j++) {
         const a = cb.numbers[i], b = cb.numbers[j]
         const count = state.pairCounts[a * S + b]
         if (!bestPair || count > bestPair.count) bestPair = { a, b, count }
       }
     const notes: string[] = []
-    const inTop5 = cb.numbers.filter((v) => predictions.slice(0, 5).some((p) => p.number === v)).length
-    notes.push(`${inTop5} of 5 from the top-5 ranking`)
+    const inTop = cb.numbers.filter((v) => predictions.slice(0, D).some((p) => p.number === v)).length
+    notes.push(`${inTop} of ${D} from the top-${D} ranking`)
     if (bestPair && bestPair.count >= 3) notes.push(`pair ${bestPair.a}·${bestPair.b} drawn together ${bestPair.count}×`)
     const total = cb.numbers.reduce((s, v) => s + v, 0)
     notes.push(`sum ${total} (typical ${Math.round(sumMean)}±${Math.round(sumSd)})`)
     const odd = cb.numbers.filter((v) => v % 2 === 1).length
-    notes.push(`${odd} odd · ${5 - odd} even`)
+    notes.push(`${odd} odd · ${D - odd} even`)
     return {
       numbers: cb.numbers,
       score: cb.score,
       relative: Math.round(100 * Math.exp(0.9 * (cb.score - best.score))),
-      avgProbability: cb.numbers.reduce((s, v) => s + (probOf.get(v) ?? 0), 0) / 5,
+      avgProbability: cb.numbers.reduce((s, v) => s + (probOf.get(v) ?? 0), 0) / D,
       pairLift: Math.exp(cb.pairAvg),
       sumZ: cb.sumZ,
       notes,

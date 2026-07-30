@@ -12,12 +12,13 @@ function mulberry32(seed: number) {
   }
 }
 
-const POOL = 56
+const POOL = 49
+const DRAW_SIZE = 6
 const FOLLOWERS: Record<number, number> = { 7: 21, 13: 28, 45: 46, 3: 33, 22: 11 }
-const SAT_BOOST = new Set([5, 10, 15, 40, 52])
+const SAT_BOOST = new Set([5, 10, 15, 40, 33])
 
 /**
- * Synthetic Mon/Wed/Sat game with deliberate, discoverable structure:
+ * Synthetic 6-of-49 Mon/Wed/Sat game with deliberate, discoverable structure:
  * uneven base weights, a Saturday bias, elevated repeat odds and a few
  * follower relationships — so the engine has real patterns to find and the
  * backtest has something to verify.
@@ -54,7 +55,7 @@ export function generateSampleDraws(): Draw[] {
       }
       const picked: number[] = []
       const avail = Array.from({ length: POOL }, (_, k) => k + 1)
-      for (let pick = 0; pick < 5; pick++) {
+      for (let pick = 0; pick < DRAW_SIZE; pick++) {
         let total = 0
         for (const i of avail) total += weights[i]
         let r = rand() * total

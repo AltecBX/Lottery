@@ -42,7 +42,7 @@ export function RankingTable({ res }: { res: EngineResult }) {
                 <Fragment key={p.number}>
                   <tr onClick={() => setExpanded(expanded === p.number ? null : p.number)} style={{ cursor: 'pointer' }}>
                     <td className="num" style={{ color: 'var(--muted)' }}>{p.rank}</td>
-                    <td><Ball n={p.number} size="sm" variant={p.rank <= 5 ? 'pick' : ''} /></td>
+                    <td><Ball n={p.number} size="sm" variant={p.rank <= res.drawSize ? 'pick' : ''} /></td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span className="scorebar" style={{ flex: 1, maxWidth: 130 }}>

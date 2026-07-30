@@ -1,5 +1,5 @@
 import type { Draw, SignalMeta } from './types.ts'
-import { HistoryState, maskOverlap } from './state.ts'
+import { DOW_WINDOW, HistoryState, maskOverlap } from './state.ts'
 
 export interface SignalContext {
   /** Day of week of the draw being predicted */
@@ -16,7 +16,10 @@ export interface RawSignal {
 export const SIGNAL_META: SignalMeta[] = [
   { key: 'freqAll', label: 'Overall frequency', short: 'Frequency', description: 'Long-run appearance rate across all history (smoothed).' },
   { key: 'freqDow', label: 'Day-of-week frequency', short: 'Day of week', description: 'Appearance rate on the target day of week, shrunk toward the overall rate.' },
-  { key: 'recency', label: 'Recency-weighted frequency', short: 'Recency', description: 'Exponentially decayed frequency — recent draws count more (half-life 20 draws).' },
+  { key: 'dowRecent', label: 'Recent form on this weekday', short: 'Day recent', description: `Appearances within the last ${DOW_WINDOW} draws held on the target weekday.` },
+  { key: 'recencyFast', label: 'Recency (fast)', short: 'Recency fast', description: 'Exponentially decayed frequency with a short memory (half-life 8 draws) — reacts quickly to streaks.' },
+  { key: 'recency', label: 'Recency (medium)', short: 'Recency', description: 'Exponentially decayed frequency — recent draws count more (half-life 20 draws).' },
+  { key: 'recencySlow', label: 'Recency (slow)', short: 'Recency slow', description: 'Exponentially decayed frequency with a long memory (half-life 45 draws) — steadier trends.' },
   { key: 'window10', label: 'Last 10 draws', short: 'Window 10', description: 'Raw appearance count in the most recent 10 draws.' },
   { key: 'window20', label: 'Last 20 draws', short: 'Window 20', description: 'Raw appearance count in the most recent 20 draws.' },
   { key: 'window50', label: 'Last 50 draws', short: 'Window 50', description: 'Raw appearance count in the most recent 50 draws.' },
@@ -33,6 +36,11 @@ export const SIGNAL_META: SignalMeta[] = [
 ]
 
 export const SIGNAL_LABEL: Record<string, SignalMeta> = Object.fromEntries(SIGNAL_META.map((s) => [s.key, s]))
+
+/** The signal keys computeRawSignals will produce for a given configuration. */
+export function signalKeys(usePosition: boolean): string[] {
+  return SIGNAL_META.map((m) => m.key).filter((k) => usePosition || k !== 'position')
+}
 
 function gauss(z: number): number {
   return Math.exp(-0.5 * z * z)
@@ -85,7 +93,7 @@ export function similarityScores(
     const overlap = maskOverlap(prevMask, state.masks[t - 1])
     const dowMatch = state.history[t].dow === ctx.targetDow ? 1 : 0
     const sumDiff = Math.abs(state.drawSums[t - 1] - prevSum)
-    const sim = 0.55 * (overlap / 5) + 0.2 * dowMatch + 0.25 * Math.max(0, 1 - sumDiff / 50)
+    const sim = 0.55 * (overlap / state.D) + 0.2 * dowMatch + 0.25 * Math.max(0, 1 - sumDiff / 50)
     if (top.length < KEEP) {
       top.push({ t, sim })
       if (top.length === KEEP) top.sort((a, b) => a.sim - b.sim)
@@ -114,6 +122,7 @@ export function similarityScores(
 /** Compute every raw signal for the given context. Uses ONLY data inside `state`. */
 export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePosition: boolean): RawSignal[] {
   const K = state.K
+  const D = state.D
   const S = K + 1
   const n = state.n
   const out: RawSignal[] = []
@@ -136,11 +145,27 @@ export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePo
     }
     push('freqDow', raw)
   }
-  // recency
+  // dowRecent: appearances in the last DOW_WINDOW draws on the target weekday
   {
     const raw = new Float64Array(S)
-    for (let i = 1; i <= K; i++) raw[i] = state.ewma[i]
-    push('recency', raw)
+    const d = ctx.targetDow
+    const eff = Math.min(state.drawsByDow[d], DOW_WINDOW)
+    if (eff > 0) {
+      for (let i = 1; i <= K; i++) raw[i] = state.dowRecent[d * S + i] / eff
+    }
+    push('dowRecent', raw)
+  }
+  // recency at three time scales
+  {
+    const rf = new Float64Array(S), rm = new Float64Array(S), rs = new Float64Array(S)
+    for (let i = 1; i <= K; i++) {
+      rf[i] = state.ewmaFast[i]
+      rm[i] = state.ewma[i]
+      rs[i] = state.ewmaSlow[i]
+    }
+    push('recencyFast', rf)
+    push('recency', rm)
+    push('recencySlow', rs)
   }
   // windows
   for (const [key, arr, w] of [['window10', state.w10, 10], ['window20', state.w20, 20], ['window50', state.w50, 50]] as const) {
@@ -243,7 +268,7 @@ export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePo
           if (j > K) continue
           acc += (state.trans[j * S + i] + m * p) / (state.transOpp[j] + m)
         }
-        raw[i] = acc / 5
+        raw[i] = acc / D
       }
     }
     push('follower', raw)
@@ -261,18 +286,18 @@ export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePo
           if (j > K) continue
           acc += (state.transByDow[(d * S + j) * S + i] + m * p) / (state.transOppByDow[d * S + j] + m)
         }
-        raw[i] = acc / 5
+        raw[i] = acc / D
       }
     }
     push('followerDow', raw)
   }
-  // position: probability mass across the five positional value distributions
+  // position: probability mass across the positional value distributions
   if (usePosition) {
     const raw = new Float64Array(S)
     const alpha = 2
     for (let i = 1; i <= K; i++) {
       let acc = 0
-      for (let p = 0; p < 5; p++) {
+      for (let p = 0; p < D; p++) {
         acc += (state.posCounts[p * S + i] + alpha * (1 / K)) / (n + alpha)
       }
       raw[i] = acc
@@ -285,6 +310,45 @@ export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePo
     push('similarity', raw)
   }
 
+  return out
+}
+
+export const SPECIAL_SIGNAL_KEYS = ['sFreq', 'sRecency', 'sDow', 'sOverdue', 'sFollower'] as const
+
+/**
+ * Signals for the bonus/special ball, computed over its own pool 1..Ks.
+ * Uses only data already inside `state` — same leak-free guarantee as the mains.
+ */
+export function computeSpecialRawSignals(state: HistoryState, targetDow: number, Ks: number): RawSignal[] {
+  const out: RawSignal[] = []
+  const n = state.sN
+  const freq = new Float64Array(Ks + 1)
+  const rec = new Float64Array(Ks + 1)
+  const dowF = new Float64Array(Ks + 1)
+  const over = new Float64Array(Ks + 1)
+  const fol = new Float64Array(Ks + 1)
+  const nDow = (() => {
+    let acc = 0
+    for (let v = 1; v <= Ks; v++) acc += state.sByDow[targetDow * 100 + v]
+    return acc
+  })()
+  let prevTotal = 0
+  if (state.sPrev > 0) {
+    for (let v = 1; v <= Ks; v++) prevTotal += state.sTrans[state.sPrev * 100 + v]
+  }
+  for (let v = 1; v <= Ks; v++) {
+    const base = (state.sCounts[v] + 10 / Ks) / (n + 10)
+    freq[v] = base
+    rec[v] = state.sEwma[v]
+    dowF[v] = (state.sByDow[targetDow * 100 + v] + 12 * base) / (nDow + 12)
+    over[v] = Math.min(3, state.sDrawsSince(v) / Math.max(1, state.sMeanGap(v, Ks)))
+    fol[v] = state.sPrev > 0 ? (state.sTrans[state.sPrev * 100 + v] + 8 * base) / (prevTotal + 8) : base
+  }
+  out.push({ key: 'sFreq', raw: freq })
+  out.push({ key: 'sRecency', raw: rec })
+  out.push({ key: 'sDow', raw: dowF })
+  out.push({ key: 'sOverdue', raw: over })
+  out.push({ key: 'sFollower', raw: fol })
   return out
 }
 

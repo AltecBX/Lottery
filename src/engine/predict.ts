@@ -17,7 +17,7 @@ export function numberStats(state: HistoryState, ctx: SignalContext, i: number):
     number: i,
     count: state.counts[i],
     overallRate: state.n ? state.counts[i] / state.n : 0,
-    expectedRate: 5 / state.K,
+    expectedRate: state.D / state.K,
     last20: state.w20[i],
     drawsSinceSeen: state.drawsSince(i),
     meanGap: state.meanGap(i),
@@ -41,9 +41,22 @@ function reasonFor(key: string, i: number, state: HistoryState, ctx: SignalConte
       return `Drawn ${st.count}× overall — ${pct(st.overallRate)} of draws vs ${pct(st.expectedRate)} expected`
     case 'freqDow':
       return `${st.dowCount}× on ${DOW_NAMES[ctx.targetDow]}s (${pct(st.dowRate)} of ${st.dowDraws} draws vs ${pct(st.overallRate)} overall)`
+    case 'recencyFast': {
+      const ratio = st.overallRate > 0 ? state.ewmaFast[i] / st.overallRate : 0
+      return `Very recent activity is ${ratio.toFixed(2)}× its long-run rate (fast decay)`
+    }
     case 'recency': {
       const ratio = st.overallRate > 0 ? state.ewma[i] / st.overallRate : 0
       return `Recent activity is ${ratio.toFixed(2)}× its long-run rate`
+    }
+    case 'recencySlow': {
+      const ratio = st.overallRate > 0 ? state.ewmaSlow[i] / st.overallRate : 0
+      return `Sustained activity is ${ratio.toFixed(2)}× its long-run rate (slow decay)`
+    }
+    case 'dowRecent': {
+      const S2 = state.K + 1
+      const c = state.dowRecent[ctx.targetDow * S2 + i]
+      return `${c} hit${c === 1 ? '' : 's'} in the last ${Math.min(state.drawsByDow[ctx.targetDow], 8)} ${DOW_NAMES[ctx.targetDow]} draws`
     }
     case 'window10':
       return `${state.w10[i]} hit${state.w10[i] === 1 ? '' : 's'} in the last 10 draws (expected ${(10 * st.expectedRate).toFixed(1)})`
@@ -124,7 +137,7 @@ export function predictNext(
   for (let i = 1; i <= K; i++) order.push(i)
   order.sort((a, b) => ensemble[b] - ensemble[a] || a - b)
 
-  const chance = 5 / K
+  const chance = state.D / K
   const predictions: NumberPrediction[] = order.map((num, pos) => {
     const st = numberStats(state, ctx, num)
     const contributions = zs

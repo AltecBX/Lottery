@@ -1,5 +1,8 @@
 import type { Draw } from './types.ts'
 
+/** Draws remembered per weekday for the "recent form on this weekday" signal. */
+export const DOW_WINDOW = 8
+
 /**
  * Incrementally-built view of history. During the walk-forward backtest the
  * state at step t contains ONLY draws 0..t-1, so every signal computed from it
@@ -7,6 +10,8 @@ import type { Draw } from './types.ts'
  */
 export class HistoryState {
   readonly K: number
+  /** Numbers per draw */
+  readonly D: number
   n = 0
   history: Draw[] = []
 
@@ -19,12 +24,21 @@ export class HistoryState {
   gapSumSq: Float64Array
   gapN: Uint32Array
 
-  ewma: Float64Array // exponentially decayed appearance rate
-  readonly ewmaLambda: number
+  /** Exponentially decayed appearance rates at three time scales */
+  ewmaFast: Float64Array
+  ewma: Float64Array
+  ewmaSlow: Float64Array
+  readonly lamFast: number
+  readonly lamMid: number
+  readonly lamSlow: number
 
   w10: Uint16Array
   w20: Uint16Array
   w50: Uint16Array
+
+  /** Appearance counts within the last DOW_WINDOW draws of each weekday */
+  dowRecent: Uint16Array // dow*(K+1)+i
+  private dowQueues: number[][] = [[], [], [], [], [], [], []] // draw indices per dow
 
   pairCounts: Uint32Array // a*(K+1)+b for a<b
 
@@ -39,20 +53,33 @@ export class HistoryState {
   repeatHits = 0
   repeatOpp = 0
 
-  posCounts: Uint32Array // p*(K+1)+i for positions 0..4
+  posCounts: Uint32Array // p*(K+1)+i for positions 0..D-1
 
   sumSum = 0
   sumSumSq = 0
   spreadSum = 0
   spreadSumSq = 0
-  oddHist = new Uint32Array(6)
+  oddHist: Uint32Array
 
   masks: Uint32Array[] = [] // per-draw bitmask of numbers
   drawSums: number[] = []
   readonly maskWords: number
 
-  constructor(K: number, ewmaHalfLife = 20) {
+  /** Bonus/special ball tracking (own pool, up to 99) */
+  sCounts = new Uint32Array(100)
+  sByDow = new Uint32Array(7 * 100)
+  sEwma = new Float64Array(100)
+  sLastSeen = new Int32Array(100).fill(-1)
+  sGapSum = new Float64Array(100)
+  sGapN = new Uint32Array(100)
+  sTrans = new Uint32Array(100 * 100) // prev special -> next special
+  sPrev = 0 // previous draw's special (0 = none)
+  sN = 0 // draws with a special ball
+  readonly sLambda = Math.pow(0.5, 1 / 25)
+
+  constructor(K: number, drawSize: number) {
     this.K = K
+    this.D = drawSize
     const S = K + 1
     this.counts = new Uint32Array(S)
     this.countsByDow = new Uint32Array(7 * S)
@@ -60,11 +87,16 @@ export class HistoryState {
     this.gapSum = new Float64Array(S)
     this.gapSumSq = new Float64Array(S)
     this.gapN = new Uint32Array(S)
+    this.ewmaFast = new Float64Array(S)
     this.ewma = new Float64Array(S)
-    this.ewmaLambda = Math.pow(0.5, 1 / ewmaHalfLife)
+    this.ewmaSlow = new Float64Array(S)
+    this.lamFast = Math.pow(0.5, 1 / 8)
+    this.lamMid = Math.pow(0.5, 1 / 20)
+    this.lamSlow = Math.pow(0.5, 1 / 45)
     this.w10 = new Uint16Array(S)
     this.w20 = new Uint16Array(S)
     this.w50 = new Uint16Array(S)
+    this.dowRecent = new Uint16Array(7 * S)
     this.pairCounts = new Uint32Array(S * S)
     this.trans = new Uint32Array(S * S)
     this.transOpp = new Uint32Array(S)
@@ -73,18 +105,19 @@ export class HistoryState {
     this.streak = new Uint16Array(S)
     this.maxStreak = new Uint16Array(S)
     this.repeatCount = new Uint32Array(S)
-    this.posCounts = new Uint32Array(5 * S)
+    this.posCounts = new Uint32Array(drawSize * S)
+    this.oddHist = new Uint32Array(drawSize + 1)
     this.maskWords = Math.ceil(S / 32)
   }
 
   /** Long-run appearance probability with Laplace smoothing. */
   rate(i: number, prior = 1): number {
-    return (this.counts[i] + prior * (5 / this.K)) / (this.n + prior)
+    return (this.counts[i] + prior * (this.D / this.K)) / (this.n + prior)
   }
 
   meanGap(i: number): number {
-    // Average draws between appearances; fall back to theoretical K/5
-    return this.gapN[i] > 0 ? this.gapSum[i] / this.gapN[i] : this.K / 5
+    // Average draws between appearances; fall back to theoretical K/D
+    return this.gapN[i] > 0 ? this.gapSum[i] / this.gapN[i] : this.K / this.D
   }
 
   gapSd(i: number): number {
@@ -96,7 +129,7 @@ export class HistoryState {
   }
 
   drawsSince(i: number): number {
-    return this.lastSeen[i] < 0 ? this.n : this.n - 1 - this.lastSeen[i] + 1
+    return this.lastSeen[i] < 0 ? this.n : this.n - this.lastSeen[i]
   }
 
   push(draw: Draw): void {
@@ -124,15 +157,33 @@ export class HistoryState {
     }
 
     // EWMA decay for everyone, bump for the drawn
-    const lam = this.ewmaLambda
-    for (let i = 1; i <= this.K; i++) this.ewma[i] *= lam
-    for (const i of nums) this.ewma[i] += 1 - lam
+    for (let i = 1; i <= this.K; i++) {
+      this.ewmaFast[i] *= this.lamFast
+      this.ewma[i] *= this.lamMid
+      this.ewmaSlow[i] *= this.lamSlow
+    }
+    for (const i of nums) {
+      this.ewmaFast[i] += 1 - this.lamFast
+      this.ewma[i] += 1 - this.lamMid
+      this.ewmaSlow[i] += 1 - this.lamSlow
+    }
 
     // Window counts: add this draw, retire draws leaving each window
     for (const i of nums) { this.w10[i]++; this.w20[i]++; this.w50[i]++ }
     if (t >= 10) for (const i of this.history[t - 10].sorted) this.w10[i]--
     if (t >= 20) for (const i of this.history[t - 20].sorted) this.w20[i]--
     if (t >= 50) for (const i of this.history[t - 50].sorted) this.w50[i]--
+
+    // Per-weekday recent window
+    {
+      const q = this.dowQueues[draw.dow]
+      q.push(t)
+      for (const i of nums) this.dowRecent[draw.dow * S + i]++
+      if (q.length > DOW_WINDOW) {
+        const old = q.shift()!
+        for (const i of this.history[old].sorted) this.dowRecent[draw.dow * S + i]--
+      }
+    }
 
     // Core counts, gaps, streaks
     const inDraw = new Set(nums)
@@ -161,19 +212,19 @@ export class HistoryState {
     }
 
     // Pairs
-    for (let a = 0; a < 5; a++)
-      for (let b = a + 1; b < 5; b++)
+    for (let a = 0; a < nums.length; a++)
+      for (let b = a + 1; b < nums.length; b++)
         this.pairCounts[nums[a] * S + nums[b]]++
 
     // Positions use source order (meaningful when the feed isn't pre-sorted)
-    for (let p = 0; p < 5; p++) {
+    for (let p = 0; p < this.D && p < draw.numbers.length; p++) {
       const v = draw.numbers[p]
       if (v <= this.K) this.posCounts[p * S + v]++
     }
 
     // Draw-shape stats
     const sum = nums.reduce((a, b) => a + b, 0)
-    const spread = nums[4] - nums[0]
+    const spread = nums[nums.length - 1] - nums[0]
     const odd = nums.filter((x) => x % 2 === 1).length
     this.sumSum += sum
     this.sumSumSq += sum * sum
@@ -187,9 +238,35 @@ export class HistoryState {
     this.masks.push(mask)
     this.drawSums.push(sum)
 
+    // Bonus/special ball
+    if (draw.special !== undefined && draw.special >= 1 && draw.special < 100) {
+      const sp = draw.special
+      for (let v = 1; v < 100; v++) this.sEwma[v] *= this.sLambda
+      this.sEwma[sp] += 1 - this.sLambda
+      this.sCounts[sp]++
+      this.sByDow[draw.dow * 100 + sp]++
+      if (this.sLastSeen[sp] >= 0) {
+        this.sGapSum[sp] += this.sN - this.sLastSeen[sp]
+        this.sGapN[sp]++
+      }
+      this.sLastSeen[sp] = this.sN
+      if (this.sPrev > 0) this.sTrans[this.sPrev * 100 + sp]++
+      this.sPrev = sp
+      this.sN++
+    }
+
     this.drawsByDow[draw.dow]++
     this.history.push(draw)
     this.n++
+  }
+
+  /** Draws-with-special elapsed since the special value last appeared. */
+  sDrawsSince(v: number): number {
+    return this.sLastSeen[v] < 0 ? this.sN : this.sN - this.sLastSeen[v]
+  }
+
+  sMeanGap(v: number, Ks: number): number {
+    return this.sGapN[v] > 0 ? this.sGapSum[v] / this.sGapN[v] : Ks
   }
 
   sumMean(): number { return this.n ? this.sumSum / this.n : 0 }

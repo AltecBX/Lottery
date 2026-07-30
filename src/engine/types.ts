@@ -4,25 +4,36 @@ export interface Draw {
   date: string
   /** 0 = Sunday … 6 = Saturday (derived from date) */
   dow: number
-  /** The five numbers in the order they appear in the source data */
+  /** The main drawn numbers in the order they appear in the source data */
   numbers: number[]
-  /** The five numbers sorted ascending */
+  /** The main drawn numbers sorted ascending */
   sorted: number[]
+  /** Bonus/special ball (Powerball-style), drawn from its own pool */
+  special?: number
 }
 
 export interface Settings {
-  /** Highest number in the pool. 0 = auto-detect from data. */
+  /** Highest number in the main pool. 0 = auto-detect from data. */
   poolMax: number
   /** Optional override for the next draw date (ISO). Empty = auto from schedule. */
   nextDate: string
   /** Window size for the selectable-window frequency explorer (UI only). */
   exploreWindow: number
+  /** Main numbers per draw. 0 = auto-detect from data. */
+  drawSize: number
+  /** Bonus-ball column handling: auto-detect, force last column, or none. */
+  bonus: 'auto' | 'yes' | 'no'
+  /** Highest number in the bonus-ball pool. 0 = auto-detect. */
+  specialMax: number
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   poolMax: 0,
   nextDate: '',
   exploreWindow: 20,
+  drawSize: 0,
+  bonus: 'auto',
+  specialMax: 0,
 }
 
 /** One prediction signal's normalized scores plus bookkeeping. */
@@ -102,10 +113,19 @@ export interface BacktestPoint {
   index: number
   date: string
   dow: number
-  hits5: number
+  /** Hits inside the model's top-(drawSize) picks for this draw */
+  hitsPick: number
   hits10: number
-  baselineHits5: number
+  baselineHitsPick: number
   baselineHits10: number
+  /** What the model (using only earlier draws) ranked top-10 for this draw */
+  predictedTop: number[]
+  /** What was actually drawn */
+  actual: number[]
+  /** Bonus ball: model's top-3 before the draw (when the game has one) */
+  specialTop?: number[]
+  /** Bonus ball actually drawn */
+  specialActual?: number
 }
 
 export interface SignalPerformance {
@@ -125,20 +145,30 @@ export interface SignalPerformance {
 export interface BacktestSummary {
   evaluated: number
   minHistory: number
-  /** Chance expectation for hits in a random top-5 / top-10 */
-  chance5: number
+  /** Chance expectation for hits in a random top-(drawSize) / top-10 */
+  chancePick: number
   chance10: number
-  ensemble5: number
+  ensemblePick: number
   ensemble10: number
-  baseline5: number
+  baselinePick: number
   baseline10: number
-  /** Percent of evaluated draws where ensemble top-10 caught >= 2 of 5 */
+  /** Percent of evaluated draws where ensemble top-10 caught >= 2 winners */
   ens10AtLeast2: number
   points: BacktestPoint[]
   byDow: { dow: number; draws: number; ensemble10: number; baseline10: number }[]
   signals: SignalPerformance[]
   /** Empirical hit-rate by predicted rank (calibrated, monotone) */
   rankHitRate: number[]
+  /** Bonus-ball backtest (present when the game has one) */
+  special?: {
+    evaluated: number
+    /** Rate the actual bonus ball was the model's #1 pick */
+    top1: number
+    /** Rate the actual bonus ball was in the model's top-3 */
+    top3: number
+    chance1: number
+    chance3: number
+  }
 }
 
 export interface HotColdEntry {
@@ -200,10 +230,28 @@ export interface PositionProfile {
   histogram: number[]
 }
 
+/** The bonus-ball prediction (Powerball-style games). */
+export interface SpecialResult {
+  /** Highest number in the bonus pool */
+  K: number
+  /** Ranked candidates with calibrated probabilities */
+  picks: { number: number; probability: number; count: number; drawsSinceSeen: number }[]
+}
+
+/** A signal actively driving the next prediction. */
+export interface DriverEntry {
+  key: string
+  label: string
+  description: string
+  weight: number
+}
+
 export interface EngineResult {
   ok: boolean
   message?: string
   K: number
+  /** Numbers per draw in this dataset */
+  drawSize: number
   drawCount: number
   firstDate: string
   lastDate: string
@@ -214,10 +262,19 @@ export interface EngineResult {
   inputSorted: boolean
 
   predictions: NumberPrediction[]
-  top5: NumberPrediction[]
+  /** The model's actual pick set: top drawSize numbers */
+  topPick: NumberPrediction[]
   top10: NumberPrediction[]
   bestCombo: ComboPrediction | null
   altCombos: ComboPrediction[]
+  /** Signals driving the next prediction, weekday-adapted, strongest first */
+  drivers: DriverEntry[]
+  /** True when learned weights differ meaningfully from a uniform blend */
+  weightsLearned: boolean
+  /** Bonus-ball prediction, when the dataset has one */
+  special: SpecialResult | null
+  /** Set when the number pool appears to have changed over the history (rule change) */
+  eraNotice: { earlyMax: number; currentMax: number; cutoffDate: string; affected: number } | null
 
   hot: HotColdEntry[]
   cold: HotColdEntry[]

@@ -8,7 +8,7 @@ export function CombosPanel({ res }: { res: EngineResult }) {
       id="combos"
       title="Combination builder"
       className="half"
-      sub="Five-number tickets assembled from the top candidates — scored on member strength, pair affinity, and how closely the ticket's shape (sum, odd/even) matches historical draws."
+      sub={`${res.drawSize}-number tickets assembled from the top candidates — scored on member strength, pair affinity, and how closely the ticket's shape (sum, odd/even) matches historical draws.`}
     >
       <div className="tbl-wrap">
         <table className="tbl">

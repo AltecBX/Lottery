@@ -35,14 +35,29 @@ describe('date parsing', () => {
 })
 
 describe('parsing delimited text', () => {
-  it('parses the pipe format from the spec', () => {
+  it('parses the 5-number pipe format from the spec', () => {
     const text = 'Date | Day of Week | Number 1 | Number 2 | Number 3 | Number 4 | Number 5\n' +
       '3/30/2026 | Monday | 9 | 13 | 28 | 45 | 51\n' +
       '4/1/2026 | Wednesday | 2 | 9 | 17 | 33 | 40\n'
-    const { draws, errors } = parseDelimitedText(text)
+    const { draws, errors, drawSize } = parseDelimitedText(text)
     expect(errors).toEqual([])
+    expect(drawSize).toBe(5)
     expect(draws).toHaveLength(2)
     expect(draws[0]).toMatchObject({ date: '2026-03-30', dow: 1, sorted: [9, 13, 28, 45, 51] })
+  })
+  it('auto-detects 6-number games', () => {
+    const text = '2026-03-30,9,13,28,45,49,3\n2026-04-01,2,9,17,33,40,44'
+    const { draws, errors, drawSize } = parseDelimitedText(text)
+    expect(errors).toEqual([])
+    expect(drawSize).toBe(6)
+    expect(draws[0].sorted).toEqual([3, 9, 13, 28, 45, 49])
+  })
+  it('a draw-size override splits off bonus columns', () => {
+    const text = '2026-03-30,9,13,28,45,49,3\n2026-04-01,2,9,17,33,40,44'
+    const { draws, drawSize, warnings } = parseDelimitedText(text, 5)
+    expect(drawSize).toBe(5)
+    expect(draws[0].sorted).toEqual([9, 13, 28, 45, 49])
+    expect(warnings.some((w) => w.includes('extra number columns'))).toBe(true)
   })
   it('parses plain CSV without day column and sorts by date', () => {
     const text = '2026-04-01,2,9,17,33,40\n2026-03-30,9,13,28,45,51'
@@ -54,14 +69,61 @@ describe('parsing delimited text', () => {
     const { draws, errors } = parseDelimitedText('2026-03-30,9,9,28,45,51\nnot-a-date,1,2,3,4,5\n2026-04-01,1,2,3,4')
     expect(draws).toHaveLength(0)
     expect(errors).toHaveLength(3)
-    expect(errors[0]).toMatch(/duplicate number/)
-    expect(errors[1]).toMatch(/date/)
-    expect(errors[2]).toMatch(/found 4 numbers/)
+    expect(errors.some((e) => /duplicate number/.test(e))).toBe(true)
+    expect(errors.some((e) => /as a date/.test(e))).toBe(true)
+    expect(errors.some((e) => /found 4 numbers, need 5/.test(e))).toBe(true)
   })
-  it('ignores extra columns and warns', () => {
-    const out = rowsToDraws([['2026-03-30', '9', '13', '28', '45', '51', '12']])
-    expect(out.draws[0].sorted).toEqual([9, 13, 28, 45, 51])
-    expect(out.warnings.some((w) => w.includes('Extra columns'))).toBe(true)
+  it('ignores minority extra columns and warns', () => {
+    const out = rowsToDraws([
+      ['2026-03-28', '1', '13', '28', '45', '51'],
+      ['2026-03-29', '2', '14', '29', '46', '50'],
+      ['2026-03-30', '9', '13', '28', '45', '51', '12'],
+    ])
+    expect(out.drawSize).toBe(5)
+    expect(out.draws[2].sorted).toEqual([9, 13, 28, 45, 51])
+    expect(out.warnings.some((w) => w.includes('extra number columns'))).toBe(true)
+  })
+  it("splits a Powerball-style 'Pball' column into a separate special ball (user's format)", () => {
+    const text = 'Draw Date\tDay\tFirst\tSecond\tThird\tFourth\tFifth\tPball\n' +
+      '7/27/26\tMonday\t6\t26\t46\t58\t65\t25\n' +
+      '7/25/26\tSaturday\t3\t4\t24\t36\t47\t17\n' +
+      '7/22/26\tWednesday\t4\t5\t22\t50\t58\t1\n' +
+      '7/20/26\tMonday\t2\t9\t44\t53\t59\t8\n'
+    const { draws, errors, drawSize, hasSpecial } = parseDelimitedText(text)
+    expect(errors).toEqual([])
+    expect(drawSize).toBe(5)
+    expect(hasSpecial).toBe(true)
+    expect(draws[draws.length - 1]).toMatchObject({ date: '2026-07-27', sorted: [6, 26, 46, 58, 65], special: 25 })
+  })
+  it('detects a bonus ball from value patterns even without a header', () => {
+    const rows: string[] = []
+    let seed = 5
+    const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+    for (let i = 0; i < 30; i++) {
+      const mains = new Set<number>()
+      while (mains.size < 5) mains.add(1 + Math.floor(rand() * 69))
+      const pb = 1 + Math.floor(rand() * 26)
+      const d = new Date(2025, 0, 1 + i * 3)
+      rows.push(`${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()},${[...mains].sort((a, b) => a - b).join(',')},${pb}`)
+    }
+    const { drawSize, hasSpecial, errors } = parseDelimitedText(rows.join('\n'))
+    expect(errors).toEqual([])
+    expect(drawSize).toBe(5)
+    expect(hasSpecial).toBe(true)
+  })
+  it('does NOT mistake a plain sorted 6-number game for 5+bonus', () => {
+    const rows: string[] = []
+    let seed = 9
+    const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+    for (let i = 0; i < 30; i++) {
+      const nums = new Set<number>()
+      while (nums.size < 6) nums.add(1 + Math.floor(rand() * 49))
+      const d = new Date(2025, 0, 1 + i * 3)
+      rows.push(`${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()},${[...nums].sort((a, b) => a - b).join(',')}`)
+    }
+    const { drawSize, hasSpecial } = parseDelimitedText(rows.join('\n'))
+    expect(drawSize).toBe(6)
+    expect(hasSpecial).toBe(false)
   })
   it('merge skips exact duplicates', () => {
     const a = [D('2026-03-30', [1, 2, 3, 4, 5])]
@@ -75,7 +137,7 @@ describe('parsing delimited text', () => {
 
 describe('history state', () => {
   it('tracks counts, gaps, windows and transitions', () => {
-    const s = new HistoryState(20)
+    const s = new HistoryState(20, 5)
     s.push(D('2026-01-05', [1, 2, 3, 4, 5]))
     s.push(D('2026-01-07', [1, 6, 7, 8, 9]))
     s.push(D('2026-01-09', [1, 2, 10, 11, 12]))
@@ -93,6 +155,8 @@ describe('history state', () => {
     expect(s.repeatCount[1]).toBe(2)
     // pair (1,2) appeared twice together
     expect(s.pairCounts[1 * 21 + 2]).toBe(2)
+    // per-weekday recent window: Monday saw draw 0 only
+    expect(s.dowRecent[1 * 21 + 1]).toBe(1)
   })
 })
 
@@ -111,9 +175,9 @@ describe('walk-forward backtest', () => {
 
   it('never leaks future data: replacing the final draw only affects the final point', () => {
     const draws = sample.slice(0, 120)
-    const mutated = [...draws.slice(0, 119), D('2026-12-28', [50, 51, 52, 53, 54])]
-    const a = runBacktest(draws, 56, false)
-    const b = runBacktest(mutated, 56, false)
+    const mutated = [...draws.slice(0, 119), D('2026-12-28', [44, 45, 46, 47, 48, 49])]
+    const a = runBacktest(draws, 49, 6, false)
+    const b = runBacktest(mutated, 49, 6, false)
     expect(a.summary.points.length).toBe(b.summary.points.length)
     for (let i = 0; i < a.summary.points.length - 1; i++) {
       expect(a.summary.points[i]).toEqual(b.summary.points[i])
@@ -121,7 +185,7 @@ describe('walk-forward backtest', () => {
   })
 
   it('learns on the structured sample: ensemble beats chance and the rank calibration is monotone', () => {
-    const bt = runBacktest(sample, 56, false)
+    const bt = runBacktest(sample, 49, 6, false)
     expect(bt.summary.evaluated).toBeGreaterThan(500)
     expect(bt.summary.ensemble10).toBeGreaterThan(bt.summary.chance10)
     for (let i = 1; i < bt.rankHitRate.length; i++) {
@@ -133,23 +197,114 @@ describe('walk-forward backtest', () => {
     const repeatPerf = bt.summary.signals.find((s) => s.key === 'repeat')
     expect(repeatPerf && repeatPerf.skill).toBeGreaterThan(0)
   })
+
+  it('records the self-test trail: predicted top-10 and actual numbers per draw', () => {
+    const bt = runBacktest(sample.slice(0, 200), 49, 6, false)
+    const p = bt.summary.points[bt.summary.points.length - 1]
+    expect(p.predictedTop).toHaveLength(10)
+    expect(new Set(p.predictedTop).size).toBe(10)
+    expect(p.actual).toHaveLength(6)
+    const hits = p.actual.filter((n) => p.predictedTop.includes(n)).length
+    expect(p.hits10).toBe(hits)
+  })
+})
+
+function powerballLike(n: number): Draw[] {
+  // 5-of-69 mains + 1-of-26 special with a mildly hot special value
+  let seed = 0xbeef
+  const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+  const draws: Draw[] = []
+  for (let i = 0; i < n; i++) {
+    const mains = new Set<number>()
+    while (mains.size < 5) mains.add(1 + Math.floor(rand() * 69))
+    const special = rand() < 0.18 ? 21 : 1 + Math.floor(rand() * 26)
+    const dt = new Date(2024, 0, 1 + Math.floor(i / 3) * 7 + [0, 2, 5][i % 3])
+    const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+    const sorted = [...mains].sort((a, b) => a - b)
+    draws.push({ date: iso, dow: dt.getDay(), numbers: sorted, sorted, special })
+  }
+  return draws
+}
+
+describe('bonus-ball model', () => {
+  const draws = powerballLike(400)
+  const res = runEngine(draws, DEFAULT_SETTINGS)
+
+  it('models the special ball in its own pool and logs its self-tests', () => {
+    expect(res.ok).toBe(true)
+    expect(res.drawSize).toBe(5)
+    expect(res.special).not.toBeNull()
+    expect(res.special!.K).toBeGreaterThanOrEqual(25)
+    expect(res.special!.picks.length).toBe(4)
+    for (const p of res.special!.picks) {
+      expect(p.number).toBeGreaterThanOrEqual(1)
+      expect(p.number).toBeLessThanOrEqual(res.special!.K)
+      expect(p.probability).toBeGreaterThan(0)
+    }
+    expect(res.backtest.special).toBeDefined()
+    expect(res.backtest.special!.evaluated).toBeGreaterThan(300)
+    const last = res.backtest.points[res.backtest.points.length - 1]
+    expect(last.specialTop).toHaveLength(3)
+    expect(typeof last.specialActual).toBe('number')
+    // The planted hot special (21) should be catchable: top-3 above chance
+    expect(res.backtest.special!.top3).toBeGreaterThan(res.backtest.special!.chance3)
+  })
+
+  it('special leakage guard: replacing the final draw leaves earlier points identical', () => {
+    const mutated = [...draws.slice(0, -1), { ...draws[draws.length - 1], special: 5, date: '2026-12-30' }]
+    const a = runEngine(draws, DEFAULT_SETTINGS)
+    const b = runEngine(mutated, DEFAULT_SETTINGS)
+    for (let i = 0; i < a.backtest.points.length - 1; i++) {
+      expect(a.backtest.points[i]).toEqual(b.backtest.points[i])
+    }
+  })
+})
+
+describe('era detection', () => {
+  it('flags a mid-history pool change and points at the cutoff', () => {
+    let seed = 4242
+    const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+    const draws: Draw[] = []
+    for (let i = 0; i < 300; i++) {
+      const pool = i < 150 ? 59 : 69 // rule change halfway
+      const mains = new Set<number>()
+      while (mains.size < 5) mains.add(1 + Math.floor(rand() * pool))
+      const dt = new Date(2020, 0, 1 + Math.floor(i / 3) * 7 + [0, 2, 5][i % 3])
+      const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+      const sorted = [...mains].sort((a, b) => a - b)
+      draws.push({ date: iso, dow: dt.getDay(), numbers: sorted, sorted })
+    }
+    const res = runEngine(draws, DEFAULT_SETTINGS)
+    expect(res.ok).toBe(true)
+    expect(res.eraNotice).not.toBeNull()
+    expect(res.eraNotice!.earlyMax).toBeLessThanOrEqual(59)
+    expect(res.eraNotice!.currentMax).toBeGreaterThan(59)
+    expect(res.eraNotice!.cutoffDate >= draws[140].date).toBe(true)
+  })
+
+  it('stays quiet on a stable pool', () => {
+    const sample = generateSampleDraws()
+    const res = runEngine(sample, DEFAULT_SETTINGS)
+    expect(res.eraNotice).toBeNull()
+  })
 })
 
 describe('full engine', () => {
   const sample = generateSampleDraws()
   const res = runEngine(sample, DEFAULT_SETTINGS)
 
-  it('produces a complete, coherent result', () => {
+  it('produces a complete, coherent 6-number result', () => {
     expect(res.ok).toBe(true)
-    expect(res.K).toBe(56)
-    expect(res.top5).toHaveLength(5)
+    expect(res.K).toBe(49)
+    expect(res.drawSize).toBe(6)
+    expect(res.topPick).toHaveLength(6)
     expect(res.top10).toHaveLength(10)
-    expect(res.predictions).toHaveLength(56)
+    expect(res.predictions).toHaveLength(49)
     expect(res.predictions[0].rank).toBe(1)
     expect(res.predictions[0].probability).toBeGreaterThanOrEqual(res.predictions[9].probability)
     expect(res.bestCombo).not.toBeNull()
-    expect(res.bestCombo!.numbers).toHaveLength(5)
-    expect(new Set(res.bestCombo!.numbers).size).toBe(5)
+    expect(res.bestCombo!.numbers).toHaveLength(6)
+    expect(new Set(res.bestCombo!.numbers).size).toBe(6)
     expect(res.altCombos.length).toBeGreaterThan(0)
     expect(res.similar.length).toBeGreaterThan(0)
     expect(res.hot.length).toBeGreaterThan(0)
@@ -160,10 +315,10 @@ describe('full engine', () => {
     expect(res.nextDow).toBe(3)
   })
 
-  it('estimated probabilities are calibrated (sum roughly to 5 numbers per draw)', () => {
+  it('estimated probabilities are calibrated (sum roughly to 6 numbers per draw)', () => {
     const total = res.predictions.reduce((s, p) => s + p.probability, 0)
-    expect(total).toBeGreaterThan(3.5)
-    expect(total).toBeLessThan(6.5)
+    expect(total).toBeGreaterThan(4.5)
+    expect(total).toBeLessThan(7.5)
   })
 
   it('every top prediction explains itself', () => {
@@ -173,6 +328,27 @@ describe('full engine', () => {
       expect(p.contributions.some((c) => c.contribution > 0 && c.reason)).toBe(true)
       expect(['High', 'Medium', 'Low']).toContain(p.confidence)
     }
+  })
+
+  it('still analyzes 5-number histories (auto-detected)', () => {
+    const five = sample.slice(0, 120).map((d) => ({
+      date: d.date,
+      dow: d.dow,
+      numbers: d.sorted.slice(0, 5),
+      sorted: d.sorted.slice(0, 5),
+    }))
+    const r = runEngine(five, DEFAULT_SETTINGS)
+    expect(r.ok).toBe(true)
+    expect(r.drawSize).toBe(5)
+    expect(r.topPick).toHaveLength(5)
+    expect(r.bestCombo!.numbers).toHaveLength(5)
+  })
+
+  it('rejects mixed draw sizes with a clear message', () => {
+    const mixed = [...sample.slice(0, 30), D('2026-07-28', [1, 2, 3, 4, 5])]
+    const r = runEngine(mixed, DEFAULT_SETTINGS)
+    expect(r.ok).toBe(false)
+    expect(r.message).toMatch(/mixes draws/)
   })
 
   it('refuses tiny datasets gracefully', () => {
@@ -187,9 +363,9 @@ describe('full engine', () => {
     expect(r.backtest.evaluated).toBe(0)
     // signals must actually contribute — an empty weight map would zero every
     // score and rank numbers 1,2,3,... purely by the numeric tie-break
-    expect(r.top5.some((p) => p.score !== 0)).toBe(true)
+    expect(r.topPick.some((p) => p.score !== 0)).toBe(true)
     expect(r.predictions[0].contributions.some((c) => c.contribution !== 0)).toBe(true)
-    expect(r.top5.map((p) => p.number)).not.toEqual([1, 2, 3, 4, 5])
+    expect(r.topPick.map((p) => p.number)).not.toEqual([1, 2, 3, 4, 5, 6])
     for (const p of r.top10) expect(p.confidence).toBe('Low')
   })
 })
