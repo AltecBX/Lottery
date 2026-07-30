@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { Draw, EngineResult } from '../engine/types.ts'
+import type { SavedTicket } from '../engine/games.ts'
 import { formatDate } from '../engine/dates.ts'
 import { formatOdds, jackpotOdds } from '../engine/odds.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
@@ -20,7 +21,13 @@ interface Evaluation {
 }
 
 /** Score any ticket against the model and the full history. */
-export function TicketLab({ res, draws }: { res: EngineResult; draws: Draw[] }) {
+export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTicket }: {
+  res: EngineResult
+  draws: Draw[]
+  savedTickets: SavedTicket[]
+  onSaveTicket: (t: SavedTicket) => void
+  onRemoveTicket: (index: number) => void
+}) {
   const D = res.drawSize
   const hasSpecial = res.special !== null
   const defaults = res.bestCombo?.numbers ?? res.topPick.map((p) => p.number)
@@ -30,6 +37,29 @@ export function TicketLab({ res, draws }: { res: EngineResult; draws: Draw[] }) 
   const [evalResult, setEvalResult] = useState<Evaluation | null>(null)
 
   const rankOf = useMemo(() => new Map(res.predictions.map((p) => [p.number, p])), [res.predictions])
+  const latest = draws.length > 0 ? draws[draws.length - 1] : null
+
+  const parseInputs = (): SavedTicket | null => {
+    const parsed = nums.map((s) => Number(s.trim()))
+    if (parsed.some((n) => !Number.isInteger(n) || n < 1 || n > res.K)) return null
+    if (new Set(parsed).size !== D) return null
+    const t: SavedTicket = { numbers: [...parsed].sort((a, b) => a - b) }
+    if (hasSpecial && special.trim() !== '') {
+      const sp = Number(special.trim())
+      if (Number.isInteger(sp) && sp >= 1) t.special = sp
+    }
+    return t
+  }
+
+  const saveCurrent = () => {
+    const t = parseInputs()
+    if (!t) {
+      setError(`Enter ${D} valid, different numbers first.`)
+      return
+    }
+    setError('')
+    onSaveTicket(t)
+  }
 
   const evaluate = () => {
     const parsed = nums.map((s) => Number(s.trim()))
@@ -110,7 +140,7 @@ export function TicketLab({ res, draws }: { res: EngineResult; draws: Draw[] }) 
       className="half"
       sub="Type any ticket to see how it compares statistically — model ranks, shape, and how it would have fared against every draw in your history."
     >
-      <div className="num-inputs" style={{ gridTemplateColumns: `repeat(${D}, 1fr)${hasSpecial ? ' 12px 1fr' : ''}`, alignItems: 'center' }}>
+      <div className="num-inputs" style={{ gridTemplateColumns: `repeat(${D}, minmax(0, 1fr))${hasSpecial ? ' 12px minmax(0, 1fr)' : ''}`, alignItems: 'center' }}>
         {nums.map((v, i) => (
           <input
             key={i}
@@ -147,6 +177,7 @@ export function TicketLab({ res, draws }: { res: EngineResult; draws: Draw[] }) 
         >
           Use model's pick
         </button>
+        <button className="btn sm" onClick={saveCurrent}>☆ Save ticket</button>
       </div>
       {error && <p style={{ color: 'var(--bad-text)', fontSize: 13, marginTop: 8 }}>{error}</p>}
 
@@ -196,6 +227,38 @@ export function TicketLab({ res, draws }: { res: EngineResult; draws: Draw[] }) 
           <p className="hint">
             Honest note: every possible ticket has identical jackpot odds
             {res.special ? ` (${formatOdds(jackpotOdds(res.K, D, res.special.K))})` : ''} — this compares statistics, not destiny.
+          </p>
+        </div>
+      )}
+
+      {savedTickets.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div className="mini-title">
+            My saved tickets — checked against the latest draw{latest ? ` (${formatDate(latest.date)})` : ''}
+          </div>
+          <div style={{ display: 'grid', gap: 8 }}>
+            {savedTickets.map((t, i) => {
+              const actual = latest ? new Set(latest.sorted) : new Set<number>()
+              const hits = t.numbers.filter((n) => actual.has(n)).length
+              const spHit = latest && t.special !== undefined && latest.special === t.special
+              return (
+                <div className="saved-ticket" key={`${t.numbers.join('-')}|${t.special ?? ''}`}>
+                  {t.numbers.map((n) => (
+                    <Ball key={n} n={n} size="sm" variant={actual.has(n) ? 'match' : ''} />
+                  ))}
+                  {t.special !== undefined && (
+                    <Ball n={t.special} size="sm" variant={spHit ? 'special' : 'faded'} title="bonus ball" />
+                  )}
+                  <span className="meta">
+                    {latest ? `${hits}/${D} hit${spHit ? ' + bonus!' : ''}` : 'no draws yet'}
+                  </span>
+                  <button className="btn ghost sm danger" title="Remove ticket" onClick={() => onRemoveTicket(i)}>✕</button>
+                </div>
+              )
+            })}
+          </div>
+          <p className="hint" style={{ display: 'block', marginTop: 8 }}>
+            Saved tickets re-check themselves automatically every time new results sync in.
           </p>
         </div>
       )}

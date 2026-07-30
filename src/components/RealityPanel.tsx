@@ -40,6 +40,7 @@ export function RealityPanel({ res }: { res: EngineResult }) {
       <div className="split">
         <div>
           <div className="mini-title">How many of the model's {D} picks hit a typical draw</div>
+          <div className="tbl-wrap">
           <table className="tbl">
             <thead>
               <tr>
@@ -80,12 +81,14 @@ export function RealityPanel({ res }: { res: EngineResult }) {
               ))}
             </tbody>
           </table>
+          </div>
           <p className="hint" style={{ display: 'block', marginTop: 8 }}>
             Catching 0–1 is the normal result. That is not the model failing — it is what a {D}-of-{K} game does.
           </p>
         </div>
         <div>
           <div className="mini-title">The odds nobody can change (any ticket, any method)</div>
+          <div className="tbl-wrap">
           <table className="tbl">
             <tbody>
               <tr>
@@ -108,6 +111,7 @@ export function RealityPanel({ res }: { res: EngineResult }) {
               )}
             </tbody>
           </table>
+          </div>
           <p className="card-sub" style={{ marginTop: 10, marginBottom: 0 }}>
             This model's measured edge on your data is <strong>{edge.toFixed(2)}×</strong> chance — it catches on average{' '}
             {res.backtest.ensemble10.toFixed(2)} winners in its top-10 where guessing would catch {res.backtest.chance10.toFixed(2)}.

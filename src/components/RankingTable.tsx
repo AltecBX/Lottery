@@ -31,7 +31,7 @@ export function RankingTable({ res }: { res: EngineResult }) {
               <th>Score</th>
               <th className="num">Est. probability</th>
               <th>Edge</th>
-              <th>Main reason</th>
+              <th className="hide-sm">Main reason</th>
             </tr>
           </thead>
           <tbody>
@@ -55,7 +55,7 @@ export function RankingTable({ res }: { res: EngineResult }) {
                     </td>
                     <td className="num" style={{ fontWeight: 640 }}>{fmtPct(p.probability)}</td>
                     <td><EdgeChip probability={p.probability} chance={res.drawSize / res.K} /></td>
-                    <td style={{ color: 'var(--ink-2)', fontSize: 13 }}>{top?.reason ?? '—'}</td>
+                    <td className="hide-sm" style={{ color: 'var(--ink-2)', fontSize: 13 }}>{top?.reason ?? '—'}</td>
                   </tr>
                   {expanded === p.number && (
                     <tr className="rank-expand">

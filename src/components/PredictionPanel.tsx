@@ -1,20 +1,51 @@
+import { useState } from 'react'
 import type { EngineResult } from '../engine/types.ts'
 import { DOW_NAMES, formatDate } from '../engine/dates.ts'
 import { Ball, Tile, fmtPct } from './shared.tsx'
 
-export function PredictionPanel({ res }: { res: EngineResult }) {
+function daysUntil(iso: string): number {
+  const [y, m, d] = iso.split('-').map(Number)
+  const target = new Date(y, m - 1, d)
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.round((target.getTime() - today.getTime()) / 86400000)
+}
+
+export function PredictionPanel({ res, gameName }: { res: EngineResult; gameName: string }) {
+  const [shared, setShared] = useState(false)
   const bt = res.backtest
   const D = res.drawSize
   const edge10 = bt.chance10 > 0 ? bt.ensemble10 / bt.chance10 : 1
   const recent = bt.points.slice(-100)
   const recent10 = recent.length ? recent.reduce((s, p) => s + p.hits10, 0) / recent.length : 0
 
+  const dUntil = daysUntil(res.nextDate)
+  const countdown = dUntil < 0 ? 'awaiting result — tap Sync' : dUntil === 0 ? 'draw day — tonight!' : dUntil === 1 ? 'tomorrow' : `in ${dUntil} days`
+
+  const share = async () => {
+    const picks = res.topPick.map((p) => p.number).join('-')
+    const sp = res.special?.picks[0]?.number
+    const text = `${gameName || 'Pattern Lab'} · ${DOW_NAMES[res.nextDow]} ${formatDate(res.nextDate)}\nPattern Lab picks: ${picks}${sp ? ` · Bonus ${sp}` : ''}\n(Statistical analysis for fun — every ticket has the same jackpot odds.)`
+    try {
+      if (navigator.share) await navigator.share({ text })
+      else {
+        await navigator.clipboard.writeText(text)
+        setShared(true)
+        window.setTimeout(() => setShared(false), 2400)
+      }
+    } catch { /* user canceled the share sheet */ }
+  }
+
   return (
     <section id="prediction" className="card hero-card section-anchor">
       <div className="hero-top">
         <h2 style={{ fontSize: 19 }}>Next draw prediction</h2>
+        <span className="countdown-chip">⏳ {countdown}</span>
         <span className="hero-date">
-          {DOW_NAMES[res.nextDow]}, {formatDate(res.nextDate)} · learned from {res.drawCount.toLocaleString()} draws · retrains on every result
+          {DOW_NAMES[res.nextDow]}, {formatDate(res.nextDate)} · learned from {res.drawCount.toLocaleString()} draws
+        </span>
+        <span style={{ marginLeft: 'auto' }}>
+          <button className="btn sm" onClick={() => void share()}>{shared ? '✓ Copied' : '↗ Share picks'}</button>
         </span>
       </div>
 

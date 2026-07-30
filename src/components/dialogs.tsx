@@ -258,7 +258,7 @@ export function AddResultDialog({ open, onClose, defaultDate, poolMax, drawSize,
       </div>
       <div className="field">
         <label>The {countWord} numbers (any order)</label>
-        <div className="num-inputs" style={{ gridTemplateColumns: `repeat(${D}, 1fr)` }}>
+        <div className="num-inputs" style={{ gridTemplateColumns: `repeat(${D}, minmax(0, 1fr))` }}>
           {nums.map((v, i) => (
             <input
               key={i}
