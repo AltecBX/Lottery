@@ -390,7 +390,7 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
   const [bonus, setBonus] = useState<'auto' | 'yes' | 'no'>('auto')
   const [specialMax, setSpecialMax] = useState('')
   const [drawTime, setDrawTime] = useState('22:59')
-  const [eraChoice, setEraChoice] = useState<'current' | 'all'>('current')
+  const [eraChoice, setEraChoice] = useState<'current' | 'all'>('all')
 
   useEffect(() => {
     if (open) {
@@ -400,7 +400,7 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
       setBonus(settings.bonus)
       setSpecialMax(settings.specialMax > 0 ? String(settings.specialMax) : '')
       setDrawTime(settings.drawTime || '22:59')
-      setEraChoice(settings.era ?? 'current')
+      setEraChoice(settings.era ?? 'all')
     }
   }, [open, settings])
 
@@ -482,11 +482,11 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
         <div className="field">
           <label>Which draws to analyze</label>
           <select value={eraChoice} onChange={(e) => setEraChoice(e.target.value as 'current' | 'all')}>
-            <option value="current">
-              Current rules only — {era.kept.toLocaleString()} draws from {formatDate(era.cutoffDate)}
-            </option>
             <option value="all">
               Everything — all {(era.kept + era.excluded).toLocaleString()} draws, including older rules
+            </option>
+            <option value="current">
+              Current rules only — {era.kept.toLocaleString()} draws from {formatDate(era.cutoffDate)}
             </option>
           </select>
           <span className="help">
@@ -495,10 +495,12 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
             {era.currentSpecialMax > 0 && era.earlySpecialMax !== era.currentSpecialMax
               ? `, bonus ball ${era.earlySpecialMax} → ${era.currentSpecialMax}`
               : ''}
-            . The {era.excluded.toLocaleString()} earlier draws were played under rules that no longer exist, so they
-            inflate the pool size, the jackpot odds and every frequency stat — which is usually what an
-            implausibly large "model edge" turns out to be. Nothing is deleted either way; this only chooses what the
-            model reads, and you can switch back here at any time.
+            . Everything is the default, so all {(era.kept + era.excluded).toLocaleString()} draws are analyzed.
+            Worth knowing what that costs: the {era.excluded.toLocaleString()} earlier draws were played under rules
+            that no longer exist, so the detected pool stretches to cover them — which widens the jackpot odds and
+            every expected-value figure built on them, and leaves numbers that only exist under the current rules
+            looking permanently cold. Switching to current rules only fixes that at the price of a shorter history.
+            Nothing is deleted either way; this only chooses what the model reads.
           </span>
         </div>
       )}

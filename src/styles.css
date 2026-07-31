@@ -167,12 +167,12 @@ input, select, textarea { font: inherit; color: var(--ink); }
 /* the horizontal lockup — the artwork carries its own wordmark, so no text sits
    beside it. It is drawn on black with a soft glow, so light mode gives it the
    dark plaque it was made for instead of bleaching its edges. */
-/* The file carries a mirrored reflection under the mark, which is right at full
-   size and a quarter of wasted height in a 48px header — so the header crops to
-   the mark itself (1199x470 of the artwork) while the welcome screen shows all
-   of it. Same asset, no second file. */
+/* Below the mark the file carries a strapline drawn for white paper and a
+   mirrored reflection — both right at full size, both illegible or wasted in a
+   48px header. So the header crops to the mark itself (1523x660 of the
+   artwork) while the welcome screen shows all of it. Same asset, no second file. */
 .brand-lockup {
-  display: block; height: 58px; width: auto; aspect-ratio: 1199 / 470;
+  display: block; height: 58px; width: auto; aspect-ratio: 1523 / 660;
   object-fit: cover; object-position: top; max-width: 100%;
 }
 :root:not([data-theme='dark']) .brand {
