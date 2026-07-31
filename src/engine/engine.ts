@@ -8,7 +8,7 @@ import { analyzeRepeats } from './repeats.ts'
 import { analyzePositions, positionalFit } from './positions.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
-  topFollowers, topPairs, trends, windowCounts,
+  topFollowers, topPairs, trends, weekdaySignificance, windowCounts,
 } from './analytics.ts'
 import { addDays, dowOf } from './dates.ts'
 
@@ -21,7 +21,7 @@ function emptyResult(message: string): EngineResult {
     scheduleDows: [], nextDate: '', nextDow: 0, inputSorted: true,
     predictions: [], topPick: [], top10: [], bestCombo: null, altCombos: [],
     drivers: [], weightsLearned: false, special: null, eraNotice: null,
-    repeats: null, bestComboIsNew: null, positionAnalysis: null, bestComboFit: null,
+    repeats: null, bestComboIsNew: null, positionAnalysis: null, bestComboFit: null, weekdayTest: [],
     hot: [], cold: [], overdue: [], pairs: [], followers: [], dowProfiles: [],
     rising: [], falling: [], streaks: [], positions: [], similar: [],
     frequency: [], windowFrequency: [],
@@ -230,6 +230,7 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
     pairs: topPairs(state),
     followers: topFollowers(state),
     dowProfiles: dowProfiles(state, scheduleDows),
+    weekdayTest: weekdaySignificance(state, scheduleDows),
     rising,
     falling,
     streaks: currentStreaks(state),

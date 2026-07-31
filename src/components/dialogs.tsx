@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Draw, Settings } from '../engine/types.ts'
-import { parseDelimitedText, rowsToDraws, type ParseOutcome } from '../engine/parse.ts'
+import { parseDelimitedText, parseMoney, rowsToDraws, type ParseOutcome } from '../engine/parse.ts'
 import { fetchOfficialResults, SYNC_SOURCES, type SyncKey } from '../engine/sync.ts'
 import { dowOf, DOW_NAMES, formatDate } from '../engine/dates.ts'
 
@@ -132,6 +132,7 @@ export function ImportDialog({ open, onClose, hasExisting, expectedSize, bonusMo
         <div className="help" style={{ marginTop: 6 }}>
           Expected columns: Date, optional Day of Week, then the drawn numbers (5, 6 — any count is auto-detected).
           A trailing Powerball/bonus column is detected automatically and analyzed in its own pool.
+          Optional <strong>Jackpot</strong> and <strong>Winner location</strong> columns are picked up from the header too.
           Comma, tab, semicolon or “|” separated.
         </div>
         <input
@@ -216,6 +217,8 @@ export function AddResultDialog({ open, onClose, defaultDate, poolMax, drawSize,
   const [date, setDate] = useState(defaultDate)
   const [nums, setNums] = useState<string[]>(Array(D).fill(''))
   const [special, setSpecial] = useState('')
+  const [jackpot, setJackpot] = useState('')
+  const [location, setLocation] = useState('')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -238,6 +241,9 @@ export function AddResultDialog({ open, onClose, defaultDate, poolMax, drawSize,
     }
     const draw: Draw = { date, dow: dowOf(date), numbers: parsed, sorted: [...parsed].sort((a, b) => a - b) }
     if (sp !== undefined) draw.special = sp
+    const amount = parseMoney(jackpot)
+    if (amount !== null) draw.jackpot = amount
+    if (location.trim() !== '') draw.winnerLocation = location.trim()
     onAdd(draw)
   }
 
@@ -290,6 +296,29 @@ export function AddResultDialog({ open, onClose, defaultDate, poolMax, drawSize,
           <span className="help">Drawn from its own pool{specialMax > 0 ? ` (1–${specialMax} seen so far)` : ''}.</span>
         </div>
       )}
+      <details className="extra-fields">
+        <summary>Jackpot &amp; winner location (optional)</summary>
+        <div className="field">
+          <label htmlFor="add-jackpot">Advertised jackpot</label>
+          <input
+            id="add-jackpot"
+            value={jackpot}
+            placeholder="e.g. $1.2 billion, 245M, 90000000"
+            onChange={(e) => setJackpot(e.target.value)}
+          />
+          <span className="help">Powers the expected-value and jackpot-split math in the Jackpot panel.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="add-location">Where a winning ticket was sold</label>
+          <input
+            id="add-location"
+            value={location}
+            placeholder="e.g. Middlebury, VT"
+            onChange={(e) => setLocation(e.target.value)}
+          />
+          <span className="help">Leave blank when the jackpot rolled over. Recorded for interest — it has no bearing on the numbers.</span>
+        </div>
+      </details>
       {error && <p style={{ color: 'var(--bad-text)', fontSize: 13 }}>{error}</p>}
     </Dialog>
   )

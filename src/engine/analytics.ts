@@ -61,6 +61,34 @@ export function topFollowers(state: HistoryState, limit = 12): FollowerEntry[] {
   return out.sort((a, b) => b.lift * Math.log(1 + b.count) - a.lift * Math.log(1 + a.count)).slice(0, limit)
 }
 
+/**
+ * Does the weekday actually change which numbers come up? For each draw day,
+ * compare every number's count on that day against the flat expectation with a
+ * chi-square goodness-of-fit test. `z` puts the statistic on a standard scale:
+ * |z| under 2 is ordinary variation, above 3 is a genuine anomaly worth a look.
+ */
+export function weekdaySignificance(
+  state: HistoryState,
+  scheduleDows: number[],
+): { dow: number; draws: number; chi2: number; dof: number; z: number }[] {
+  const S = state.K + 1
+  const out: { dow: number; draws: number; chi2: number; dof: number; z: number }[] = []
+  for (const dow of scheduleDows) {
+    const nDraws = state.drawsByDow[dow]
+    if (nDraws < 20) continue
+    const expected = (nDraws * state.D) / state.K
+    if (expected < 1) continue
+    let chi2 = 0
+    for (let i = 1; i <= state.K; i++) {
+      const obs = state.countsByDow[dow * S + i]
+      chi2 += ((obs - expected) ** 2) / expected
+    }
+    const dof = state.K - 1
+    out.push({ dow, draws: nDraws, chi2, dof, z: (chi2 - dof) / Math.sqrt(2 * dof) })
+  }
+  return out
+}
+
 export function dowProfiles(state: HistoryState, scheduleDows: number[]): DowProfile[] {
   const S = state.K + 1
   return scheduleDows.map((dow) => {

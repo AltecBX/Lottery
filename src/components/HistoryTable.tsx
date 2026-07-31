@@ -13,6 +13,10 @@ export function HistoryTable({ draws, exportName, onDelete }: { draws: Draw[]; e
   const pages = Math.max(1, Math.ceil(ordered.length / PAGE))
   const cur = Math.min(page, pages - 1)
   const rows = ordered.slice(cur * PAGE, cur * PAGE + PAGE)
+  const hasJackpot = draws.some((d) => d.jackpot !== undefined)
+  const hasLocation = draws.some((d) => d.winnerLocation)
+  const money = (n: number) =>
+    n >= 1e9 ? `$${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `$${(n / 1e6).toFixed(0)}M` : `$${n.toLocaleString()}`
 
   const exportCsv = () => {
     const blob = new Blob([drawsToCsv(draws)], { type: 'text/csv' })
@@ -39,8 +43,10 @@ export function HistoryTable({ draws, exportName, onDelete }: { draws: Draw[]; e
               <th className="sortable" onClick={() => { setNewestFirst((v) => !v); setPage(0) }} title="Toggle newest/oldest first">
                 Date{newestFirst ? ' ▼' : ' ▲'}
               </th>
-              <th>Day</th>
+              <th className="hide-sm">Day</th>
               <th>Numbers</th>
+              {hasJackpot && <th className="num">Jackpot</th>}
+              {hasLocation && <th className="hide-sm">Won in</th>}
               <th style={{ width: 40 }} />
             </tr>
           </thead>
@@ -48,13 +54,21 @@ export function HistoryTable({ draws, exportName, onDelete }: { draws: Draw[]; e
             {rows.map((d) => (
               <tr key={`${d.date}-${d.sorted.join(',')}`}>
                 <td style={{ whiteSpace: 'nowrap' }}>{formatDate(d.date)}</td>
-                <td style={{ color: 'var(--ink-2)' }}>{DOW_NAMES[d.dow]}</td>
+                <td className="hide-sm" style={{ color: 'var(--ink-2)' }}>{DOW_NAMES[d.dow]}</td>
                 <td>
                   <span className="pair-cell" style={{ gap: 5 }}>
                     {d.numbers.map((n) => <Ball key={n} n={n} size="sm" />)}
                     {d.special !== undefined && <Ball n={d.special} size="sm" variant="special" title="Bonus ball" />}
                   </span>
                 </td>
+                {hasJackpot && (
+                  <td className="num" style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                    {d.jackpot !== undefined ? money(d.jackpot) : '—'}
+                  </td>
+                )}
+                {hasLocation && (
+                  <td className="hide-sm" style={{ color: 'var(--ink-2)' }}>{d.winnerLocation ?? '—'}</td>
+                )}
                 <td>
                   <button
                     className="btn ghost sm danger"
@@ -68,7 +82,7 @@ export function HistoryTable({ draws, exportName, onDelete }: { draws: Draw[]; e
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={4} style={{ color: 'var(--muted)' }}>No draws yet.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={4 + (hasJackpot ? 1 : 0) + (hasLocation ? 1 : 0)} style={{ color: 'var(--muted)' }}>No draws yet.</td></tr>}
           </tbody>
         </table>
       </div>

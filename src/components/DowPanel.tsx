@@ -11,6 +11,27 @@ export function DowPanel({ res }: { res: EngineResult }) {
       className="half"
       sub={`This game draws on ${res.scheduleDows.map((d) => DOW_NAMES[d]).join(', ')}. Top numbers per weekday, with their lift vs the overall rate.`}
     >
+      {res.weekdayTest.length > 0 && (() => {
+        const worst = res.weekdayTest.reduce((a, b) => (Math.abs(b.z) > Math.abs(a.z) ? b : a))
+        const real = worst.z > 3
+        return (
+          <div className={`notice${real ? ' warn' : ''}`} style={{ marginBottom: 14 }}>
+            <strong style={{ color: 'var(--ink)' }}>
+              {real
+                ? `${DOW_NAMES[worst.dow]} draws look genuinely uneven.`
+                : 'Does the weekday actually matter here? Not measurably.'}
+            </strong>{' '}
+            Testing every number's count on each draw day against a flat expectation, the strongest deviation is{' '}
+            {DOW_NAMES[worst.dow]} at <strong>{worst.z >= 0 ? '+' : ''}{worst.z.toFixed(1)}σ</strong>
+            {real
+              ? ' — beyond ordinary sampling noise, so it is worth watching as more draws arrive.'
+              : ' — well inside the range random draws produce, so weekday-specific "hot numbers" below are noise, not an edge.'}{' '}
+            The Backtest panel shows the same verdict empirically: the day-of-week signals only earn weight if they
+            actually predict.
+          </div>
+        )
+      })()}
+
       <div className="tbl-wrap">
         <table className="tbl">
           <thead>
