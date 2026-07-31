@@ -50,6 +50,7 @@ export function InspectorPanel({ res, draws }: { res: EngineResult; draws: Draw[
 
   return (
     <SectionCard
+      collapsible
       id="inspector"
       title="Number inspector"
       className="half"

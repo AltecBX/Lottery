@@ -3,6 +3,7 @@ import type { Draw, EngineResult } from '../engine/types.ts'
 import type { SavedTicket } from '../engine/games.ts'
 import { formatDate } from '../engine/dates.ts'
 import { formatOdds, jackpotOdds } from '../engine/odds.ts'
+import { positionalFit, type PositionalFit } from '../engine/positions.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
 
 interface Evaluation {
@@ -18,6 +19,7 @@ interface Evaluation {
   bestOverlapDates: string[]
   ge3Count: number
   specialCount: number | null
+  posFit: PositionalFit | null
 }
 
 /** Score any ticket against the model and the full history. */
@@ -130,6 +132,7 @@ export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTick
       bestOverlapDates: overlapDates.get(bestOverlap) ?? [],
       ge3Count: ge3,
       specialCount: sp !== null ? specialCount : null,
+      posFit: res.positionAnalysis ? positionalFit(res.positionAnalysis, parsed) : null,
     })
   }
 
@@ -222,8 +225,37 @@ export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTick
                 <td>Draws matching 3+ of these</td>
                 <td className="num">{evalResult.ge3Count} of {draws.length}</td>
               </tr>
+              {evalResult.posFit && (
+                <tr>
+                  <td>Column shape</td>
+                  <td className="num">
+                    {evalResult.posFit.impossibleColumns.length > 0 ? (
+                      <span style={{ color: 'var(--bad-text)', fontWeight: 640 }}>
+                        column {evalResult.posFit.impossibleColumns.join(', ')} outside anything ever drawn
+                      </span>
+                    ) : (
+                      <>{Math.round(evalResult.posFit.plausibility * D)} of {D} columns in their typical range</>
+                    )}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
+
+          {evalResult.posFit && (
+            <div>
+              <div className="mini-title">Each number vs that column's own history</div>
+              <div className="col-fit-row">
+                {evalResult.posFit.perColumn.map((c) => (
+                  <div className={`col-fit${c.outOfRange ? ' bad' : ''}`} key={c.position}>
+                    <Ball n={c.value} size="sm" variant={c.outOfRange ? 'faded' : ''} />
+                    <span className="pct">{fmtPct(c.percentile, 0)}</span>
+                    <span className="band">typ. {c.typicalLow}–{c.typicalHigh}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <p className="hint">
             Honest note: every possible ticket has identical jackpot odds
             {res.special ? ` (${formatOdds(jackpotOdds(res.K, D, res.special.K))})` : ''} — this compares statistics, not destiny.

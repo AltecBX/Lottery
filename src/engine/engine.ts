@@ -5,6 +5,7 @@ import { predictNext } from './predict.ts'
 import { buildCombos } from './combos.ts'
 import { computeSpecialRawSignals, similarityScores, SIGNAL_LABEL, zNormalize } from './signals.ts'
 import { analyzeRepeats } from './repeats.ts'
+import { analyzePositions, positionalFit } from './positions.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
   topFollowers, topPairs, trends, windowCounts,
@@ -20,7 +21,7 @@ function emptyResult(message: string): EngineResult {
     scheduleDows: [], nextDate: '', nextDow: 0, inputSorted: true,
     predictions: [], topPick: [], top10: [], bestCombo: null, altCombos: [],
     drivers: [], weightsLearned: false, special: null, eraNotice: null,
-    repeats: null, bestComboIsNew: null,
+    repeats: null, bestComboIsNew: null, positionAnalysis: null, bestComboFit: null,
     hot: [], cold: [], overdue: [], pairs: [], followers: [], dowProfiles: [],
     rising: [], falling: [], streaks: [], positions: [], similar: [],
     frequency: [], windowFrequency: [],
@@ -130,7 +131,10 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
   const activeWeights = bt.weights
   const ctx = { targetDow: nextDow, prev: draws[draws.length - 1] }
   const { predictions } = predictNext(state, ctx, activeWeights, bt.rankHitRate, bt.summary.evaluated, usePosition, bt.mlWeights)
-  const combos = buildCombos(state, predictions)
+  // Per-column (order-statistic) history — also constrains combination shape
+  const positionAnalysis = analyzePositions(draws, K, D, inputSorted)
+  const combos = buildCombos(state, predictions, 8, positionAnalysis)
+  const bestComboFit = combos.best ? positionalFit(positionAnalysis, combos.best.numbers) : null
 
   const weightEntries = Object.entries(activeWeights).sort((a, b) => b[1] - a[1])
   const uniform = weightEntries.length > 0 ? 1 / weightEntries.length : 0
@@ -218,6 +222,8 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
     eraNotice,
     repeats,
     bestComboIsNew,
+    positionAnalysis,
+    bestComboFit,
     hot,
     cold,
     overdue: overdueList(state),

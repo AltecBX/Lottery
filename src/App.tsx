@@ -24,16 +24,18 @@ import { HistoryTable } from './components/HistoryTable.tsx'
 import { PredictionLog } from './components/PredictionLog.tsx'
 import { RealityPanel } from './components/RealityPanel.tsx'
 import { RepeatsPanel } from './components/RepeatsPanel.tsx'
+import { PositionsPanel } from './components/PositionsPanel.tsx'
 import { InspectorPanel } from './components/InspectorPanel.tsx'
 import { TicketLab } from './components/TicketLab.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 import { AddGameDialog } from './components/AddGameDialog.tsx'
-import { JPMonogram } from './components/Logo.tsx'
+import { JPMonogram, JerryLockup } from './components/Logo.tsx'
 
 const NAV = [
   ['prediction', 'Prediction'],
   ['ranking', 'Ranking'],
   ['log', 'Prediction log'],
+  ['columns', 'Columns'],
   ['repeats', 'Repeats'],
   ['reality', 'Reality check'],
   ['ticket', 'Ticket lab'],
@@ -364,8 +366,7 @@ export default function App() {
         <div className="container">
           {games.length === 0 && (
             <div className="empty-hero">
-              <div className="empty-logo" aria-hidden="true"><JPMonogram size={132} /></div>
-              <h2>Find the patterns. Test them honestly.</h2>
+              <JerryLockup />
               <p>
                 Set up Powerball and Mega Millions with one tap — Jerry Pattern Lab downloads the full official history,
                 keeps it synced, and runs a transparent, self-testing statistical engine over each game separately:
@@ -439,6 +440,7 @@ export default function App() {
               <RealityPanel res={result} />
               <RankingTable res={result} />
               <PredictionLog res={result} />
+              <PositionsPanel res={result} />
               <RepeatsPanel res={result} />
               <TicketLab
                 key={`t-${activeGame?.id}-${result.lastDate}-${result.drawCount}`}
@@ -465,9 +467,11 @@ export default function App() {
           )}
 
           {hasData && !result && (
-            <div className="empty-hero">
-              <div className="spinner" style={{ margin: '0 auto 14px', width: 26, height: 26 }} />
-              <p>Crunching {draws.length.toLocaleString()} draws…</p>
+            <div className="skeleton-grid">
+              <div className="skel hero" />
+              <div className="skel row" />
+              <div className="skel row" />
+              <p className="skel-note">Backtesting {draws.length.toLocaleString()} draws — every one re-predicted from scratch…</p>
             </div>
           )}
         </div>

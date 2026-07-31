@@ -4,6 +4,7 @@ import { SectionCard, Ball, fmtPct } from './shared.tsx'
 export function PairsPanel({ res }: { res: EngineResult }) {
   return (
     <SectionCard
+      collapsible
       id="pairs"
       title="Pairs & followers"
       className="half"

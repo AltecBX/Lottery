@@ -82,6 +82,20 @@ Twenty-one signals are computed for every number, strictly from data prior to th
 | Analogy | k-nearest similar historical situations (previous draw overlap + weekday + draw shape) and what followed them |
 | Machine-learned | an online multinomial-regression combiner (below) whose output joins the ensemble as a signal |
 
+### Column (order-statistic) analysis
+
+Each draw column is compared against every draw's same column — the 1st ball against all first balls, the 2nd
+against all second balls, and so on. For an ascending feed each column is an **order statistic** with an exactly
+computable distribution: `P(r-th smallest = v) = C(v-1, r-1)·C(K-v, D-r) / C(K, D)`. The Columns panel plots the
+observed histogram against that exact curve, and reports each column's typical band, its full observed range, and
+how many pool values have never held it.
+
+The honest read: these shapes are strong but they come from *sorting*, not from a game bias — observed column
+means track the theoretical `r(K+1)/(D+1)` almost exactly, so no single number becomes more likely. Where it does
+pay off is **combination shape**: a line whose lowest number sits above anything column 1 has ever produced is
+implausible, so the combination builder penalizes shapes the history has never produced, and the Ticket lab
+scores any ticket column-by-column.
+
 ## The prediction engine
 
 - Each signal is z-normalized and combined into a **Predictive Score** by a weighted ensemble.

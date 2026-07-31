@@ -1,5 +1,6 @@
 import type { ComboPrediction, NumberPrediction } from './types.ts'
 import { HistoryState } from './state.ts'
+import type { PositionAnalysis } from './positions.ts'
 
 function pairLogLift(state: HistoryState, a: number, b: number): number {
   const S = state.K + 1
@@ -38,6 +39,7 @@ export function buildCombos(
   state: HistoryState,
   predictions: NumberPrediction[],
   maxCombos = 8,
+  positions: PositionAnalysis | null = null,
 ): { best: ComboPrediction | null; alts: ComboPrediction[] } {
   const D = state.D
   if (state.K < D || predictions.length < D) return { best: null, alts: [] }
@@ -53,7 +55,26 @@ export function buildCombos(
   let oddModeP = 0
   for (let o = 0; o <= D; o++) oddModeP = Math.max(oddModeP, (state.oddHist[o] + 1) / (n + D + 1))
 
-  interface Scored { numbers: number[]; score: number; pairAvg: number; sumZ: number }
+  /**
+   * Penalize combinations whose sorted shape sits far outside what each column
+   * of the history actually produces (e.g. a "lowest ball" of 55 in a game where
+   * column 1 has never exceeded 51). Normal shapes are untouched — the term only
+   * bites beyond 1.5 sd, so it breaks ties toward realistic draws.
+   */
+  const positionPenalty = (sortedSet: number[]): number => {
+    if (!positions) return 0
+    let acc = 0
+    for (let i = 0; i < sortedSet.length; i++) {
+      const col = positions.columns[i]
+      if (!col || col.sd <= 0) continue
+      const z = Math.abs(sortedSet[i] - col.mean) / col.sd
+      if (z > 1.5) acc += (z - 1.5) ** 2
+      if (sortedSet[i] < col.min || sortedSet[i] > col.max) acc += 4
+    }
+    return acc
+  }
+
+  interface Scored { numbers: number[]; score: number; pairAvg: number; sumZ: number; posPenalty: number }
   const combos: Scored[] = []
   const pairsPerCombo = (D * (D - 1)) / 2
   forEachCombination(nums.length, D, (idx) => {
@@ -69,8 +90,10 @@ export function buildCombos(
     const odd = set.filter((v) => v % 2 === 1).length
     const oddP = (state.oddHist[odd] + 1) / (n + D + 1)
     const oddBonus = Math.log(oddP / oddModeP) // <= 0
-    const score = base + 0.3 * pairAvg - 0.06 * sumZ * sumZ + 0.25 * oddBonus
-    combos.push({ numbers: [...set].sort((p, q) => p - q), score, pairAvg, sumZ })
+    const sortedSet = [...set].sort((p, q) => p - q)
+    const posPenalty = positionPenalty(sortedSet)
+    const score = base + 0.3 * pairAvg - 0.06 * sumZ * sumZ + 0.25 * oddBonus - 0.12 * posPenalty
+    combos.push({ numbers: sortedSet, score, pairAvg, sumZ, posPenalty })
   })
 
   combos.sort((p, q) => q.score - p.score)
@@ -95,6 +118,7 @@ export function buildCombos(
     notes.push(`sum ${total} (typical ${Math.round(sumMean)}±${Math.round(sumSd)})`)
     const odd = cb.numbers.filter((v) => v % 2 === 1).length
     notes.push(`${odd} odd · ${D - odd} even`)
+    if (positions && cb.posPenalty < 0.5) notes.push('column shape typical')
     return {
       numbers: cb.numbers,
       score: cb.score,
