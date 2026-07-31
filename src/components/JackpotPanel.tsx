@@ -193,7 +193,9 @@ export function JackpotPanel({ res, draws }: { res: EngineResult; draws: Draw[] 
           {j.jackpotVsNumbers.lowMean.toFixed(1)} (t = {j.jackpotVsNumbers.t.toFixed(2)}).{' '}
           {Math.abs(j.jackpotVsNumbers.t) < 2
             ? 'No detectable difference — exactly as expected, since the machine has no idea what the prize is.'
-            : 'That gap is larger than usual sampling noise; treat it as a curiosity to watch, not a mechanism.'}
+            : 'That is slightly past ordinary sampling noise, but it is almost certainly timing rather than cause: the ' +
+              'biggest jackpots cluster in recent years, so this mostly compares recent draws against older ones. ' +
+              'The machine still has no idea what the prize is.'}
         </p>
       )}
     </SectionCard>

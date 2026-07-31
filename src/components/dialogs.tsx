@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Draw, Settings } from '../engine/types.ts'
 import { parseDelimitedText, parseMoney, rowsToDraws, type ParseOutcome } from '../engine/parse.ts'
-import { fetchOfficialResults, SYNC_SOURCES, type SyncKey } from '../engine/sync.ts'
+import { CSV_SOURCES, csvSourceUrl, fetchCsvSource, fetchOfficialResults, SYNC_SOURCES, type SyncKey } from '../engine/sync.ts'
 import { dowOf, DOW_NAMES, formatDate } from '../engine/dates.ts'
 
 function Dialog({ open, onClose, title, children, footer }: {
@@ -96,6 +96,28 @@ export function ImportDialog({ open, onClose, hasExisting, expectedSize, bonusMo
     }
   }
 
+  const handleCsv = async (key: SyncKey) => {
+    const src = CSV_SOURCES.find((s) => s.key === key)!
+    setBusy(true)
+    setFileName(`${src.label} CSV (louisianalottery.com)`)
+    try {
+      setOutcome(await fetchCsvSource(key))
+    } catch {
+      setOutcome({
+        draws: [],
+        errors: [
+          `The ${src.label} CSV could not be read directly — louisianalottery.com does not allow other sites to fetch it from a browser. ` +
+          'Use the download link below, then drop the file above: it imports with jackpots and winner locations intact.',
+        ],
+        warnings: [],
+        drawSize: 0,
+        hasSpecial: false,
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const good = outcome && outcome.draws.length > 0
 
   return (
@@ -156,6 +178,28 @@ export function ImportDialog({ open, onClose, hasExisting, expectedSize, bonusMo
         <span className="help">
           Pulls every draw (numbers + bonus ball) from New York State's public open-data service, the API of record.
           Re-sync any time to append the newest results. Nothing about you is uploaded anywhere.
+        </span>
+      </div>
+
+      <div className="field">
+        <label>With jackpots &amp; winner locations — Louisiana Lottery CSV</label>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {CSV_SOURCES.map((s) => (
+            <span key={s.key} style={{ display: 'inline-flex', gap: 6 }}>
+              <button className="btn sm" disabled={busy} onClick={() => void handleCsv(s.key)}>
+                ⟳ {s.label}
+              </button>
+              <a className="btn sm ghost" href={csvSourceUrl(s.key)} target="_blank" rel="noreferrer" download>
+                ⤓ file
+              </a>
+            </span>
+          ))}
+        </div>
+        <span className="help">
+          Richer than the results API: the advertised jackpot, cash value and where each winning ticket was sold —
+          Powerball back to 1995. That site blocks direct browser reads, so if ⟳ fails use ⤓ to save the file and drop
+          it above; every column is recognised automatically. Appending it over a synced history fills in the jackpot
+          and location for draws you already have.
         </span>
       </div>
       <div className="field">
