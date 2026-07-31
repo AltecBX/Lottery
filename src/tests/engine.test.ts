@@ -3,6 +3,7 @@ import { parseDateToken } from '../engine/dates.ts'
 import { mergeDraws, parseDelimitedText, rowsToDraws } from '../engine/parse.ts'
 import { HistoryState } from '../engine/state.ts'
 import { isotonicDecreasing, runBacktest } from '../engine/backtest.ts'
+import { analyzeRepeats } from '../engine/repeats.ts'
 import { runEngine } from '../engine/engine.ts'
 import { generateSampleDraws } from '../engine/sample.ts'
 import { choose, hitDistribution, jackpotOdds, matchOdds } from '../engine/odds.ts'
@@ -253,6 +254,38 @@ describe('learned combiner (online regression)', () => {
     const uniform = 1 / bt.summary.signals.length
     const ml = bt.summary.signals.find((s) => s.key === 'mlModel')
     expect(ml!.weight).toBeLessThan(2 * uniform)
+  })
+
+  it('repeat scan: finds a planted exact repeat, honest chance expectation, overlap accounting', () => {
+    const draws = fairRandomDraws(9, 200, 49, 6)
+    // Plant an exact repeat of draw 10 at the end
+    const dup = { ...draws[10], date: '2026-07-30', numbers: [...draws[10].numbers], sorted: [...draws[10].sorted] }
+    const r = analyzeRepeats([...draws, dup], 49, 6)
+    expect(r.exactRepeats.length).toBeGreaterThanOrEqual(1)
+    const found = r.exactRepeats.find((e) => e.numbers.join('-') === draws[10].sorted.join('-'))
+    expect(found).toBeDefined()
+    expect(found!.dates).toContain('2026-07-30')
+    expect(r.maxOverlap).toBe(6)
+    // pairsByOverlap must account for every pair exactly once
+    const n = 201
+    expect(r.pairsByOverlap.reduce((a, b) => a + b, 0)).toBe((n * (n - 1)) / 2)
+    // Birthday expectation: C(n,2)/C(49,6)
+    expect(r.expectedRepeats).toBeCloseTo(((n * (n - 1)) / 2) / 13983816, 8)
+    // Chance-expected overlap counts sum to the total pairs too (pmf sums to 1)
+    expect(r.expectedByOverlap.reduce((a, b) => a + b, 0)).toBeCloseTo((n * (n - 1)) / 2, 4)
+  })
+
+  it('repeat scan on clean random data: no exact repeat, engine flags the best combo as new', () => {
+    const draws = fairRandomDraws(31, 400, 69, 5)
+    const r = analyzeRepeats(draws, 69, 5)
+    expect(r.exactRepeats).toHaveLength(0)
+    expect(r.maxOverlap).toBeLessThan(5)
+    const res = runEngine(draws, DEFAULT_SETTINGS)
+    expect(res.ok).toBe(true)
+    expect(res.repeats).not.toBeNull()
+    expect(res.repeats!.totalDraws).toBe(400)
+    // A best combo assembled from top-ranked numbers essentially never matches a past draw
+    expect(res.bestComboIsNew).toBe(true)
   })
 
   it('hazard histogram accounts for every (number, draw) exposure', () => {

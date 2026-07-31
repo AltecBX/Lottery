@@ -4,6 +4,7 @@ import { runBacktest, MIN_HISTORY } from './backtest.ts'
 import { predictNext } from './predict.ts'
 import { buildCombos } from './combos.ts'
 import { computeSpecialRawSignals, similarityScores, SIGNAL_LABEL, zNormalize } from './signals.ts'
+import { analyzeRepeats } from './repeats.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
   topFollowers, topPairs, trends, windowCounts,
@@ -19,6 +20,7 @@ function emptyResult(message: string): EngineResult {
     scheduleDows: [], nextDate: '', nextDow: 0, inputSorted: true,
     predictions: [], topPick: [], top10: [], bestCombo: null, altCombos: [],
     drivers: [], weightsLearned: false, special: null, eraNotice: null,
+    repeats: null, bestComboIsNew: null,
     hot: [], cold: [], overdue: [], pairs: [], followers: [], dowProfiles: [],
     rising: [], falling: [], streaks: [], positions: [], similar: [],
     frequency: [], windowFrequency: [],
@@ -186,6 +188,11 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
   const { hot, cold } = hotCold(state)
   const { rising, falling } = trends(state)
 
+  // Repeat scan: has any winning combination (or near-combination) recurred?
+  const repeats = analyzeRepeats(draws, K, D)
+  const drawnKeys = new Set(draws.map((d) => d.sorted.join('-')))
+  const bestComboIsNew = combos.best ? !drawnKeys.has([...combos.best.numbers].sort((a, b) => a - b).join('-')) : null
+
   const frequency: { number: number; count: number }[] = []
   for (let i = 1; i <= K; i++) frequency.push({ number: i, count: state.counts[i] })
 
@@ -209,6 +216,8 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
     weightsLearned,
     special,
     eraNotice,
+    repeats,
+    bestComboIsNew,
     hot,
     cold,
     overdue: overdueList(state),

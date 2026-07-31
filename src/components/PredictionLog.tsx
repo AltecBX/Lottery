@@ -5,10 +5,17 @@ import { SectionCard, Ball } from './shared.tsx'
 
 const PAGE = 10
 
-type SortKey = 'date' | 'hits' | 'bonus'
+type SortKey = 'date' | 'hits' | 'bonus' | 'top10' | 'actual'
 
 const specialHit = (p: BacktestPoint): number =>
   p.specialActual !== undefined && p.specialTop?.includes(p.specialActual) ? 1 : 0
+
+/** Lexicographic compare of two number sequences (first ball, then the next…). */
+const cmpSeq = (a: number[], b: number[]): number => {
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) if (a[i] !== b[i]) return a[i] - b[i]
+  return a.length - b.length
+}
 
 /**
  * The learning loop made visible: for every historical draw, what the model
@@ -27,6 +34,8 @@ export function PredictionLog({ res }: { res: EngineResult }) {
     const dir = desc ? -1 : 1
     if (sortKey === 'hits') arr.sort((a, b) => dir * (a.hits10 - b.hits10) || b.index - a.index)
     else if (sortKey === 'bonus') arr.sort((a, b) => dir * (specialHit(a) - specialHit(b)) || b.index - a.index)
+    else if (sortKey === 'top10') arr.sort((a, b) => dir * cmpSeq(a.predictedTop, b.predictedTop) || b.index - a.index)
+    else if (sortKey === 'actual') arr.sort((a, b) => dir * cmpSeq(a.actual, b.actual) || b.index - a.index)
     else arr.sort((a, b) => dir * (a.index - b.index))
     return arr
   }, [points, sortKey, desc])
@@ -44,7 +53,7 @@ export function PredictionLog({ res }: { res: EngineResult }) {
 
   const setSort = (key: SortKey) => {
     if (sortKey === key) setDesc((d) => !d)
-    else { setSortKey(key); setDesc(true) }
+    else { setSortKey(key); setDesc(key === 'date' || key === 'hits' || key === 'bonus') }
     setPage(0)
   }
   const arrow = (key: SortKey) => (sortKey === key ? (desc ? ' ▼' : ' ▲') : '')
@@ -78,8 +87,8 @@ export function PredictionLog({ res }: { res: EngineResult }) {
           <thead>
             <tr>
               <th className="sortable" onClick={() => setSort('date')} title="Sort by draw date">Draw{arrow('date')}</th>
-              <th>Model's top-10 before the draw</th>
-              <th>Actual result</th>
+              <th className="sortable" onClick={() => setSort('top10')} title="Sort by the model's #1 pick (then #2, …)">Model's top-10 before the draw{arrow('top10')}</th>
+              <th className="sortable" onClick={() => setSort('actual')} title="Sort by the lowest drawn number (then the next, …)">Actual result{arrow('actual')}</th>
               {hasSpecial && (
                 <th className="sortable" onClick={() => setSort('bonus')} title="Sort by bonus-ball hits">Bonus{arrow('bonus')}</th>
               )}

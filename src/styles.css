@@ -541,14 +541,14 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   border-radius: 999px; padding: 3px 12px; font-size: 12.5px; font-weight: 660;
   font-family: var(--font-display);
 }
-.saved-ticket {
+.saved-ticket, .repeat-row {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   border: 1px solid var(--border); border-radius: 12px; padding: 9px 11px;
   background: color-mix(in srgb, var(--surface-2) 45%, transparent);
   transition: border-color 0.15s ease;
 }
-.saved-ticket:hover { border-color: var(--border-strong); }
-.saved-ticket .meta { font-size: 12px; color: var(--muted); margin-left: auto; }
+.saved-ticket:hover, .repeat-row:hover { border-color: var(--border-strong); }
+.saved-ticket .meta, .repeat-row .meta { font-size: 12px; color: var(--muted); margin-left: auto; }
 
 /* ---------- Mobile bottom bar ---------- */
 .mobile-bar {

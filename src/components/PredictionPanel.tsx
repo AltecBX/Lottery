@@ -103,7 +103,19 @@ export function PredictionPanel({ res, gameName }: { res: EngineResult; gameName
               <Ball n={res.special.picks[0].number} size="sm" variant="special" />
             )}
           </span>
-          <span className="combo-note">{res.bestCombo.notes.join(' · ')}</span>
+          <span className="combo-note">
+            {res.bestCombo.notes.join(' · ')}
+            {res.bestComboIsNew === true && (
+              <>
+                {' '}· <span style={{ color: 'var(--good-text)', fontWeight: 640 }}>never drawn before ✓</span>
+              </>
+            )}
+            {res.bestComboIsNew === false && (
+              <>
+                {' '}· <span style={{ color: 'var(--gold)', fontWeight: 640 }}>matches a past winning draw</span>
+              </>
+            )}
+          </span>
         </div>
       )}
 
