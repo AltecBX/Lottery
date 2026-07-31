@@ -8,13 +8,15 @@ import brandLogo from '../assets/brand-logo.webp'
  */
 
 /**
- * Compact brand mark for the header. Same artwork file, framed on the JP
- * emblem — at 42px the full lockup's wordmark and sidebar icons are far below
- * legible size, so the chip shows that detail of the original rather than a
- * shrunken, muddy whole. Nothing is redrawn.
+ * Compact brand mark for the header — the same artwork, shown whole.
+ *
+ * It was previously framed on the JP emblem so the detail would read at small
+ * sizes, but the emblem's ring runs to the very top of the canvas and the crop
+ * sliced through it. The file is already a square, icon-shaped composition on
+ * the app's own black, so it is shown complete instead: the same image the
+ * home-screen icon uses, uncut.
  */
 export function JPMonogram() {
-  // Framing is percentage-based so the chip fills whatever box it is given.
   return (
     <span className="brand-chip" aria-hidden="true">
       <img src={brandLogo} alt="" decoding="async" />

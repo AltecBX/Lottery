@@ -3,6 +3,7 @@ import powerballPage from './fixtures/powerball-next-drawing.html?raw'
 import megaMillionsPayload from './fixtures/megamillions-latest.json?raw'
 import {
   feedJackpotFor,
+  feedUrl,
   isPlausibleEntry,
   isoDateInZone,
   parseMegaMillionsPayload,
@@ -76,6 +77,15 @@ describe('official jackpot feed', () => {
     expect(feedJackpotFor(feed, 'megamillions', '2026-08-01')).toBeNull()
     expect(feedJackpotFor(null, 'powerball', '2026-08-01')).toBeNull()
     expect(feedJackpotFor(feed, undefined, '2026-08-01')).toBeNull()
+  })
+
+  it('asks for the feed next to the page, not at the site root', () => {
+    // GitHub Pages serves this app from /Lottery/ — a root-relative URL 404s there
+    expect(feedUrl('https://altecbx.github.io/Lottery/', 42))
+      .toBe('https://altecbx.github.io/Lottery/jackpots.json?t=42')
+    expect(feedUrl('https://altecbx.github.io/Lottery/index.html', 42))
+      .toBe('https://altecbx.github.io/Lottery/jackpots.json?t=42')
+    expect(feedUrl('http://localhost:4173/', 42)).toBe('http://localhost:4173/jackpots.json?t=42')
   })
 
   it('converts instants to the right calendar date across a zone boundary', () => {

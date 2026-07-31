@@ -152,15 +152,27 @@ export function isPlausibleEntry(e: JackpotFeedEntry | null): e is JackpotFeedEn
 const FEED_FILE = 'jackpots.json'
 
 /**
+ * Where the feed lives, resolved against the page's own base.
+ *
+ * It has to be derived from the document rather than from a build-time base
+ * constant: the app is served from a sub-path on GitHub Pages, and anything
+ * that resolves to the site root asks `altecbx.github.io/jackpots.json`, which
+ * does not exist. Resolving against `document.baseURI` is correct at the root,
+ * under a sub-path, and from a file:// copy alike.
+ */
+export function feedUrl(baseUri: string, stamp: number): string {
+  return new URL(`${FEED_FILE}?t=${stamp}`, baseUri).href
+}
+
+/**
  * Read the published feed. Same-origin, so it works on a phone with no CORS
  * involvement; returns null (rather than throwing) whenever it is unavailable,
  * because the app always has its own projection to fall back on.
  */
 export async function fetchJackpotFeed(signal?: AbortSignal): Promise<JackpotFeed | null> {
-  const meta = import.meta as unknown as { env?: { BASE_URL?: string } }
-  const base = meta.env?.BASE_URL ?? '/'
+  if (typeof document === 'undefined') return null
   try {
-    const resp = await fetch(`${base}${FEED_FILE}?t=${Math.floor(Date.now() / 6e5)}`, {
+    const resp = await fetch(feedUrl(document.baseURI, Math.floor(Date.now() / 6e5)), {
       headers: { Accept: 'application/json' },
       ...(signal ? { signal } : {}),
     })
