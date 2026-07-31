@@ -155,6 +155,52 @@ export function ticketValue(
   }
 }
 
+export interface JackpotProjection {
+  amount: number
+  /** 'rollover' = grown from the last draw; 'reset' = the last draw had a winner */
+  basis: 'rollover' | 'reset'
+  /** How many past steps the estimate was measured from */
+  samples: number
+}
+
+const median = (xs: number[]): number => {
+  if (xs.length === 0) return 0
+  const s = [...xs].sort((a, b) => a - b)
+  return s[Math.floor(s.length / 2)]
+}
+
+/**
+ * Estimate the advertised jackpot for the next draw from this history's own
+ * behaviour: the typical roll-up between consecutive draws with no winner, or
+ * the typical starting amount after a jackpot is hit. It is an estimate, and
+ * the UI labels it as one — the exact figure can always be typed in.
+ */
+export function projectNextJackpot(draws: Draw[]): JackpotProjection | null {
+  const withJ = draws.filter((d) => d.jackpot !== undefined && d.jackpot > 0)
+  if (withJ.length < 4) return null
+  const last = withJ[withJ.length - 1]
+
+  // A recorded winner means the prize resets for the next draw
+  if (last.winnerLocation) {
+    const resets: number[] = []
+    for (let i = 1; i < withJ.length; i++) {
+      if (withJ[i - 1].winnerLocation) resets.push(withJ[i].jackpot!)
+    }
+    if (resets.length === 0) return null
+    return { amount: median(resets.slice(-20)), basis: 'reset', samples: resets.length }
+  }
+
+  // Otherwise it rolls over: use the typical recent increase
+  const steps: number[] = []
+  for (let i = 1; i < withJ.length; i++) {
+    if (withJ[i - 1].winnerLocation) continue
+    const diff = withJ[i].jackpot! - withJ[i - 1].jackpot!
+    if (diff > 0) steps.push(diff)
+  }
+  if (steps.length === 0) return null
+  return { amount: last.jackpot! + median(steps.slice(-30)), basis: 'rollover', samples: steps.length }
+}
+
 /** Published Powerball / Mega Millions style fixed lower tiers (US $2 games). */
 export const US_LOWER_TIERS = [
   { match: 5, withSpecial: false, prize: 1_000_000 },

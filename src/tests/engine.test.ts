@@ -10,7 +10,8 @@ import { runEngine } from '../engine/engine.ts'
 import { generateSampleDraws } from '../engine/sample.ts'
 import { choose, hitDistribution, jackpotOdds, matchOdds } from '../engine/odds.ts'
 import { attachSales, parseSalesRows, parseSocrataRows } from '../engine/sync.ts'
-import { analyzeJackpots, ticketValue, US_LOWER_TIERS } from '../engine/jackpot.ts'
+import { analyzeJackpots, projectNextJackpot, ticketValue, US_LOWER_TIERS } from '../engine/jackpot.ts'
+import { countdownTo, drawTimeLabel, formatCountdown, nextDrawInstant } from '../engine/drawtime.ts'
 import { createGame, daysSinceLastDraw, migrateLegacy } from '../engine/games.ts'
 import { DEFAULT_SETTINGS } from '../engine/types.ts'
 import type { Draw } from '../engine/types.ts'
@@ -598,6 +599,60 @@ describe('jackpot, winner location and sales', () => {
     expect(crowded.splitChance).toBeGreaterThan(0.7)
     expect(crowded.adjustedEv).toBeLessThan(bigger.grossEv)
     expect(bigger.jackpotOdds).toBe(292_201_338)
+  })
+})
+
+describe('draw countdown', () => {
+  it('resolves the official draw time through daylight saving', () => {
+    // Powerball draws 22:59 America/New_York. In August that is UTC-4 -> 02:59Z next day
+    const summer = nextDrawInstant('2026-08-01', 'powerball')!
+    expect(summer.toISOString()).toBe('2026-08-02T02:59:00.000Z')
+    // In January it is UTC-5 -> 03:59Z next day
+    const winter = nextDrawInstant('2026-01-10', 'powerball')!
+    expect(winter.toISOString()).toBe('2026-01-11T03:59:00.000Z')
+    // Mega Millions draws one minute later
+    expect(nextDrawInstant('2026-08-04', 'megamillions')!.toISOString()).toBe('2026-08-05T03:00:00.000Z')
+    // a game with no official time falls back to a local wall-clock time, so
+    // imported and custom games still get a live countdown
+    const custom = nextDrawInstant('2026-08-01', undefined, '20:30')!
+    expect(custom.getFullYear()).toBe(2026)
+    expect(custom.getHours()).toBe(20)
+    expect(custom.getMinutes()).toBe(30)
+    expect(nextDrawInstant('not-a-date', undefined)).toBeNull()
+    // and the label names whichever clock is in play
+    expect(drawTimeLabel('powerball')).toBe('10:59 PM ET')
+    expect(drawTimeLabel(undefined, '20:30')).toBe('8:30 PM')
+  })
+
+  it('counts down and flips to past after the draw moment', () => {
+    const target = new Date('2026-08-02T02:59:00.000Z')
+    const c = countdownTo(target, Date.parse('2026-07-30T22:00:00.000Z'))
+    expect(c.past).toBe(false)
+    expect(c.days).toBe(2)
+    expect(c.hours).toBe(4)
+    expect(c.minutes).toBe(59)
+    expect(formatCountdown(c)).toBe('2d 04:59:00')
+    const inside = countdownTo(target, Date.parse('2026-08-02T00:30:30.000Z'))
+    expect(inside.days).toBe(0)
+    expect(formatCountdown(inside)).toBe('02:28:30')
+    expect(countdownTo(target, Date.parse('2026-08-02T03:00:00.000Z')).past).toBe(true)
+  })
+
+  it('projects the next jackpot from rollovers, and from resets after a win', () => {
+    const base = fairRandomDraws(21, 12, 69, 5)
+    // a clean roll-up of +$20M per draw, no winner yet
+    const rolling = base.map((d, i) => ({ ...d, jackpot: 100_000_000 + i * 20_000_000 }))
+    const roll = projectNextJackpot(rolling)!
+    expect(roll.basis).toBe('rollover')
+    expect(roll.amount).toBe(rolling[rolling.length - 1].jackpot! + 20_000_000)
+
+    // once the latest draw has a winner, the next prize resets instead
+    const won = rolling.map((d, i) => (i === 3 || i === rolling.length - 1 ? { ...d, winnerLocation: 'Texas' } : d))
+    const reset = projectNextJackpot(won)!
+    expect(reset.basis).toBe('reset')
+    expect(reset.amount).toBe(won[4].jackpot)
+
+    expect(projectNextJackpot(base)).toBeNull() // no jackpot data at all
   })
 })
 

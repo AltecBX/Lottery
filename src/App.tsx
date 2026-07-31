@@ -26,6 +26,7 @@ import { RealityPanel } from './components/RealityPanel.tsx'
 import { RepeatsPanel } from './components/RepeatsPanel.tsx'
 import { PositionsPanel } from './components/PositionsPanel.tsx'
 import { JackpotPanel } from './components/JackpotPanel.tsx'
+import { NextDrawBar } from './components/NextDrawBar.tsx'
 import { InspectorPanel } from './components/InspectorPanel.tsx'
 import { TicketLab } from './components/TicketLab.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
@@ -307,6 +308,16 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const setNextJackpot = useCallback((amount: number | null, forDate: string) => {
+    if (!activeGame) return
+    updateGame(activeGame.id, (g) => {
+      const next = { ...g }
+      if (amount === null) { delete next.nextJackpot; delete next.nextJackpotFor }
+      else { next.nextJackpot = amount; next.nextJackpotFor = forDate }
+      return next
+    })
+  }, [activeGame, updateGame])
+
   const staleDays = activeGame?.syncKey && hasData ? daysSinceLastDraw(activeGame, Date.now()) : 0
   const showStaleNudge = !!activeGame?.syncKey && hasData && staleDays > 4
 
@@ -456,6 +467,7 @@ export default function App() {
                   </button>
                 </div>
               )}
+              <NextDrawBar res={result} game={activeGame} draws={draws} drawTime={settings.drawTime} onSetJackpot={setNextJackpot} />
               <PredictionPanel res={result} gameName={activeGame?.name ?? ''} />
               <RealityPanel res={result} />
               <RankingTable res={result} />

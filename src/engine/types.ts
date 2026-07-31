@@ -31,6 +31,8 @@ export interface Settings {
   bonus: 'auto' | 'yes' | 'no'
   /** Highest number in the bonus-ball pool. 0 = auto-detect. */
   specialMax: number
+  /** Local draw time as "HH:MM", used for the countdown when the game has no official time. */
+  drawTime: string
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -40,6 +42,7 @@ export const DEFAULT_SETTINGS: Settings = {
   drawSize: 0,
   bonus: 'auto',
   specialMax: 0,
+  drawTime: '22:59',
 }
 
 /** One prediction signal's normalized scores plus bookkeeping. */
