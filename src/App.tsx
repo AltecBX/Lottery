@@ -315,7 +315,7 @@ export default function App() {
           <div className="header-row">
             <div className="brand">
               <span className="brand-mark" aria-hidden="true">
-                <JPMonogram size={42} />
+                <JPMonogram />
               </span>
               <h1 className="brand-word">
                 <span className="jerry">JERRY</span>
