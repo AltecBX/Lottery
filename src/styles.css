@@ -333,7 +333,12 @@ input, select, textarea { font: inherit; color: var(--ink); }
 }
 .tile:hover { border-color: var(--border-strong); }
 .tile .label { font-size: 11.2px; color: var(--muted); font-weight: 620; text-transform: uppercase; letter-spacing: 0.06em; }
-.tile .value { font-size: 26px; font-weight: 660; margin-top: 3px; letter-spacing: -0.01em; font-family: var(--font-display); font-variant-numeric: tabular-nums; }
+.tile .value {
+  font-size: 26px; font-weight: 660; margin-top: 3px; letter-spacing: -0.01em;
+  font-family: var(--font-display); font-variant-numeric: tabular-nums;
+  /* the display face's tabular '1' sits hard against the box without this */
+  padding-left: 1px; text-wrap: balance;
+}
 .tile .delta { font-size: 12px; margin-top: 2px; color: var(--muted); }
 .tile .delta.up { color: var(--good-text); }
 .tile .delta.down { color: var(--bad-text); }
@@ -784,56 +789,172 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 .extra-fields[open] > summary::before { content: '－ '; }
 .extra-fields > summary:hover { color: var(--gold); }
 .extra-fields[open] { display: grid; gap: 13px; }
-
-/* ---------- Next-draw bar: prize + live countdown, first thing on screen ---------- */
+/* ---------- Next draw: prize + split-flap countdown, inside the prediction card ---------- */
 .next-draw {
-  grid-column: span 12;
-  display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap;
-  padding: 16px 20px; border-radius: var(--radius);
-  border: 1px solid color-mix(in srgb, var(--gold) 34%, var(--border));
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; flex-wrap: wrap;
+  margin: 14px 0 4px; padding: 14px 16px 15px; border-radius: 15px;
+  border: 1px solid color-mix(in srgb, var(--gold) 30%, var(--border));
   background:
-    radial-gradient(620px 200px at 8% 0%, rgba(226, 171, 57, 0.14), transparent 62%),
-    radial-gradient(520px 200px at 92% 100%, rgba(53, 133, 226, 0.13), transparent 60%),
-    linear-gradient(180deg, color-mix(in srgb, var(--surface) 86%, #d8952210), var(--surface) 60%);
-  box-shadow: var(--shadow);
-  animation: fadeUp 0.4s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+    radial-gradient(560px 180px at 6% 0%, var(--gold-wash), transparent 64%),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 62%, transparent), transparent 78%);
 }
-.nd-label { display: block; font-size: 11.2px; font-weight: 650; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); }
-.nd-est { color: var(--accent-bright); text-transform: none; letter-spacing: 0.02em; font-weight: 600; cursor: help; }
+.nd-prize { min-width: 0; }
+.nd-label {
+  display: flex; align-items: center; gap: 7px; flex-wrap: wrap;
+  font-size: 10.8px; font-weight: 650; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted);
+}
+.nd-src {
+  text-transform: none; letter-spacing: 0.01em; font-weight: 600; font-size: 11px;
+  color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;
+}
+.nd-src.official {
+  color: var(--good-text); border-color: color-mix(in srgb, var(--good-text) 40%, transparent);
+  background: color-mix(in srgb, var(--good-text) 10%, transparent);
+}
+.linky { border: none; background: none; padding: 0; cursor: pointer; color: inherit; text-decoration: underline; font: inherit; }
 .nd-amount {
   display: inline-flex; align-items: baseline; gap: 9px;
-  margin-top: 3px; padding: 0; border: none; background: none; cursor: pointer;
-  font-family: var(--font-display); font-weight: 700; letter-spacing: -0.015em;
-  font-size: clamp(30px, 5.6vw, 46px); line-height: 1.05;
+  margin-top: 2px; padding: 0; border: none; background: none; cursor: pointer;
+  font-family: var(--font-display); font-weight: 700; letter-spacing: -0.018em;
+  font-size: clamp(30px, 5vw, 44px); line-height: 1.04;
   background-image: linear-gradient(180deg, #ffe9a8, var(--gold-bright) 45%, #c98d16);
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
-.nd-amount .nd-pencil { font-size: 14px; color: var(--muted); -webkit-text-fill-color: var(--muted); opacity: 0; transition: opacity 0.15s ease; }
+.nd-amount .nd-pencil { font-size: 14px; -webkit-text-fill-color: var(--muted); opacity: 0; transition: opacity 0.15s ease; }
 .nd-amount:hover .nd-pencil { opacity: 1; }
+.nd-sub { display: block; font-size: 12px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
 .nd-edit { display: flex; gap: 7px; align-items: center; margin-top: 5px; flex-wrap: wrap; }
 .nd-edit input {
   width: 160px; padding: 8px 11px; border-radius: 10px; font-size: 16px; font-weight: 640;
   border: 1px solid var(--accent); background: var(--surface-2); outline: none;
   font-family: var(--font-display);
 }
-.nd-timer { text-align: right; }
-.nd-time { text-transform: none; letter-spacing: 0.02em; }
-.nd-clock {
-  display: block; margin-top: 3px;
-  font-family: var(--font-display); font-variant-numeric: tabular-nums;
-  font-size: clamp(22px, 3.4vw, 30px); font-weight: 680; color: var(--ink);
-  letter-spacing: 0.01em;
+.nd-drawing {
+  font-family: var(--font-display); font-weight: 660; font-size: 15px; color: var(--gold);
+  padding: 14px 0 18px;
 }
-.nd-clock.past { font-size: 15px; font-weight: 620; color: var(--gold); }
-.nd-clock.small { font-size: 20px; }
+.nd-when { display: flex; flex-direction: column; align-items: flex-end; gap: 7px; flex: none; }
+.nd-when-label {
+  font-size: 10.5px; font-weight: 650; letter-spacing: 0.11em; text-transform: uppercase;
+  color: var(--ink-2); font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Split-flap flip clock ---------- */
+.flip-clock {
+  --fc-w: 62px; --fc-h: 62px; --fc-fs: 38px; --fc-radius: 11px;
+  display: flex; gap: 9px; align-items: flex-start; flex: none;
+}
+.flip-clock.sm { --fc-w: 46px; --fc-h: 46px; --fc-fs: 27px; --fc-radius: 9px; }
+.flip-unit { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.flip-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.17em; text-transform: uppercase;
+  color: var(--gold); font-family: var(--font-display);
+}
+.flip-card {
+  position: relative; width: var(--fc-w); height: var(--fc-h);
+  border-radius: var(--fc-radius); perspective: 320px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3), inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  font-family: var(--font-display); font-weight: 700; font-size: var(--fc-fs);
+  font-variant-numeric: tabular-nums; color: #f6f7fb;
+}
+.flip-card::after {
+  content: ''; position: absolute; left: 0; right: 0; top: calc(50% - 1px); height: 2px;
+  background: rgba(0, 0, 0, 0.55); z-index: 6; pointer-events: none;
+}
+.fc-half {
+  position: absolute; left: 0; width: 100%; height: 50%; overflow: hidden;
+  display: flex; justify-content: center;
+  background: linear-gradient(180deg, #2c3038, #191c22);
+  backface-visibility: hidden; -webkit-backface-visibility: hidden;
+}
+.fc-half > i { font-style: normal; display: block; height: var(--fc-h); line-height: var(--fc-h); }
+.fc-top, .fc-fold-top { top: 0; border-radius: var(--fc-radius) var(--fc-radius) 0 0; }
+.fc-bottom, .fc-fold-bottom { bottom: 0; border-radius: 0 0 var(--fc-radius) var(--fc-radius); }
+.fc-bottom > i, .fc-fold-bottom > i { margin-top: calc(var(--fc-h) / -2); }
+.fc-fold-top {
+  z-index: 4; transform-origin: 50% 100%;
+  animation: fc-fall 0.34s cubic-bezier(0.36, 0, 0.66, -0.06) forwards;
+}
+.fc-fold-bottom {
+  z-index: 5; transform-origin: 50% 0; transform: rotateX(90deg);
+  animation: fc-rise 0.34s cubic-bezier(0.3, 1.06, 0.6, 1) 0.34s forwards;
+}
+@keyframes fc-fall { from { transform: rotateX(0); } to { transform: rotateX(-90deg); } }
+@keyframes fc-rise { from { transform: rotateX(90deg); } to { transform: rotateX(0); } }
+@media (prefers-reduced-motion: reduce) {
+  .fc-fold-top { display: none; }
+  .fc-fold-bottom { transform: none; animation: none; }
+}
+
+/* ---------- Ticket ledger ---------- */
+.ledger-totals {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 9px 12px; margin-bottom: 10px; border-radius: 11px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.ledger-totals b { color: var(--ink); font-family: var(--font-display); font-size: 15px; margin-right: 4px; }
+.ledger-totals .good b { color: var(--good-text); }
+.ledger-totals .bad b { color: var(--bad-text); }
+.ledger-totals .meta { margin-left: auto; }
+.ledger-prize {
+  font-family: var(--font-display); font-weight: 680; color: var(--good-text);
+  font-variant-numeric: tabular-nums; font-size: 13.5px;
+}
+.saved-ticket.won { border-color: color-mix(in srgb, var(--good-text) 45%, transparent); background: color-mix(in srgb, var(--good-text) 8%, transparent); }
+.saved-ticket .meta { margin-left: auto; }
+
+/* ---------- Portfolio ---------- */
+.pf-controls { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+.rng { display: grid; gap: 5px; min-width: 210px; flex: 1 1 210px; }
+.rng > span { font-size: 12px; color: var(--ink-2); font-weight: 600; }
+.rng input[type=range] { width: 100%; accent-color: var(--gold); }
+.chk { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
+.value-controls { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; margin: 14px 0 4px; }
+.pf-tickets { display: grid; gap: 8px; margin-bottom: 14px; }
+.pf-ticket {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  border: 1px solid var(--border); border-radius: 12px; padding: 8px 11px;
+  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
+}
+.pf-ticket .balls { display: flex; gap: 6px; flex-wrap: wrap; }
+.pf-idx { font-size: 11px; color: var(--muted); font-weight: 660; font-family: var(--font-display); width: 22px; }
+.pf-ticket .btn { margin-left: auto; }
+.tbl .row-best td { background: color-mix(in srgb, var(--gold) 9%, transparent); }
+.tbl td .sub { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
+
+/* ---------- Draw recap ---------- */
+.recap {
+  grid-column: span 12; display: grid; gap: 9px;
+  padding: 14px 16px; border-radius: var(--radius);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 9%, var(--surface)), var(--surface) 70%);
+  animation: fadeUp 0.4s cubic-bezier(0.22, 0.9, 0.3, 1) both;
+}
+.recap-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.recap-title { font-family: var(--font-display); font-weight: 660; font-size: 15px; }
+.recap-won {
+  font-family: var(--font-display); font-weight: 700; font-size: 13px; color: var(--good-text);
+  border: 1px solid color-mix(in srgb, var(--good-text) 45%, transparent); border-radius: 999px; padding: 2px 11px;
+}
+.recap-head .btn { margin-left: auto; }
+.recap-row { display: flex; align-items: center; gap: 11px; flex-wrap: wrap; font-size: 12.5px; }
+.recap-row .balls { display: flex; gap: 5px; flex-wrap: wrap; }
+.recap-date { font-weight: 640; color: var(--ink-2); min-width: 96px; font-variant-numeric: tabular-nums; }
+.recap-note { color: var(--muted); }
+.recap-hit { color: var(--good-text); }
+.update-toast { display: flex; align-items: center; gap: 11px; }
 
 @media (max-width: 760px) {
-  .next-draw {
-    padding: 14px 15px; gap: 12px;
-    flex-direction: column; align-items: stretch;
-  }
-  .nd-timer { text-align: left; padding-top: 12px; border-top: 1px solid var(--border); }
-  .nd-amount { font-size: 34px; }
+  .next-draw { padding: 13px 13px 14px; gap: 13px; flex-direction: column; align-items: stretch; }
+  .nd-amount { font-size: 36px; }
   .nd-amount .nd-pencil { opacity: 1; }
-  .nd-clock { font-size: 26px; }
+  .nd-when { align-items: center; }
+  .flip-clock { --fc-w: 56px; --fc-h: 56px; --fc-fs: 34px; justify-content: center; gap: 8px; }
+  .flip-clock.sm { --fc-w: 42px; --fc-h: 42px; --fc-fs: 25px; }
+  .pf-controls { gap: 12px; }
+  .pf-ticket .btn { margin-left: 0; }
+  .recap-date { min-width: 0; }
+  .ledger-totals { gap: 12px; }
+  .ledger-totals .meta { margin-left: 0; width: 100%; }
 }

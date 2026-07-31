@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Re-publish on a schedule so the advertised jackpot stays current: the app
+  # reads `jackpots.json` from its own origin (the operators send no CORS
+  # headers), so that file is only ever as fresh as the last deploy.
+  schedule:
+    - cron: '0 */3 * * *'
+    # ~1:30 AM Eastern, once the night's draws have settled
+    - cron: '30 5 * * *'
 
 permissions:
   contents: read
@@ -28,6 +35,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      # Never fatal: a failed fetch keeps the committed fallback in place and
+      # the app projects the jackpot from its own history instead.
+      - name: Refresh advertised jackpots
+        run: npm run jackpots
+        continue-on-error: true
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

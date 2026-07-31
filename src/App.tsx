@@ -9,8 +9,10 @@ import {
   type GameData, type GamesState, type SavedTicket,
 } from './engine/games.ts'
 import { formatDate } from './engine/dates.ts'
+import { fetchJackpotFeed, type JackpotFeed } from './engine/feed.ts'
 import { useEngine } from './hooks/useEngine.ts'
 import { useLocalStorage, useTheme } from './hooks/useLocalStorage.ts'
+import { useServiceWorker } from './hooks/useServiceWorker.ts'
 import { PredictionPanel } from './components/PredictionPanel.tsx'
 import { RankingTable } from './components/RankingTable.tsx'
 import { HotColdOverdue } from './components/HotColdOverdue.tsx'
@@ -26,15 +28,19 @@ import { RealityPanel } from './components/RealityPanel.tsx'
 import { RepeatsPanel } from './components/RepeatsPanel.tsx'
 import { PositionsPanel } from './components/PositionsPanel.tsx'
 import { JackpotPanel } from './components/JackpotPanel.tsx'
-import { NextDrawBar } from './components/NextDrawBar.tsx'
 import { InspectorPanel } from './components/InspectorPanel.tsx'
 import { TicketLab } from './components/TicketLab.tsx'
+import { PortfolioPanel } from './components/PortfolioPanel.tsx'
+import { ValuePanel } from './components/ValuePanel.tsx'
+import { RecapBanner } from './components/RecapBanner.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 import { AddGameDialog } from './components/AddGameDialog.tsx'
 import { JPMonogram, JerryLockup } from './components/Logo.tsx'
 
 const NAV = [
   ['prediction', 'Prediction'],
+  ['value', 'Is it worth it'],
+  ['portfolio', 'Play together'],
   ['ranking', 'Ranking'],
   ['log', 'Prediction log'],
   ['columns', 'Columns'],
@@ -54,6 +60,7 @@ const NAV = [
 ] as const
 
 const EMPTY_DRAWS: Draw[] = []
+const EMPTY_TICKETS: SavedTicket[] = []
 
 /** Read the multi-game state, migrating pre-multi-game storage on first run. */
 function loadInitialGames(): GamesState {
@@ -91,6 +98,9 @@ export default function App() {
   )
 
   const { result, computing } = useEngine(draws, settings)
+  // Read inside callbacks that must not re-create themselves on every recompute
+  const resultRef = useRef(result)
+  resultRef.current = result
 
   const say = (msg: string) => {
     setFlash(msg)
@@ -268,11 +278,17 @@ export default function App() {
       const active = s.games.find((x) => x.id === s.activeId) ?? s.games[0]
       if (!active) return s
       const existing = active.savedTickets ?? []
-      const key = (t: SavedTicket) => `${[...t.numbers].sort((a, b) => a - b).join(',')}|${t.special ?? ''}`
-      if (existing.some((t) => key(t) === key(ticket))) return s
+      // Stamp the draw it is played for so the ledger can settle it later
+      const stamped: SavedTicket = {
+        ...ticket,
+        forDate: ticket.forDate ?? resultRef.current?.nextDate,
+        savedAt: ticket.savedAt ?? new Date().toISOString(),
+      }
+      const key = (t: SavedTicket) => `${[...t.numbers].sort((a, b) => a - b).join(',')}|${t.special ?? ''}|${t.forDate ?? ''}`
+      if (existing.some((t) => key(t) === key(stamped))) return s
       return {
         ...s,
-        games: s.games.map((g) => (g.id === active.id ? { ...g, savedTickets: [...existing, ticket] } : g)),
+        games: s.games.map((g) => (g.id === active.id ? { ...g, savedTickets: [...existing, stamped] } : g)),
       }
     })
     say('Ticket saved — it will be checked against every new draw.')
@@ -288,6 +304,18 @@ export default function App() {
       }
     })
   }, [setGamesState])
+
+  // The advertised jackpots, published next to the app by a scheduled job.
+  // Same-origin, so it works on a phone; failure is silent because every panel
+  // falls back to projecting the prize from the history it already has.
+  const { updateReady, applyUpdate } = useServiceWorker()
+
+  const [feed, setFeed] = useState<JackpotFeed | null>(null)
+  useEffect(() => {
+    const ctl = new AbortController()
+    void fetchJackpotFeed(ctl.signal).then((f) => { if (f) setFeed(f) })
+    return () => ctl.abort()
+  }, [])
 
   // Seamless mode: when official games look stale, fetch new results on open
   // (throttled to once per hour; toasts only when something new arrived).
@@ -467,8 +495,27 @@ export default function App() {
                   </button>
                 </div>
               )}
-              <NextDrawBar res={result} game={activeGame} draws={draws} drawTime={settings.drawTime} onSetJackpot={setNextJackpot} />
-              <PredictionPanel res={result} gameName={activeGame?.name ?? ''} />
+              <RecapBanner
+                res={result}
+                draws={draws}
+                gameId={activeGame?.id ?? ''}
+                savedTickets={activeGame?.savedTickets ?? EMPTY_TICKETS}
+              />
+              <PredictionPanel
+                res={result}
+                gameName={activeGame?.name ?? ''}
+                game={activeGame}
+                draws={draws}
+                drawTime={settings.drawTime}
+                feed={feed}
+                onSetJackpot={setNextJackpot}
+              />
+              <ValuePanel res={result} game={activeGame} draws={draws} feed={feed} drawTime={settings.drawTime} />
+              <PortfolioPanel
+                key={`p-${activeGame?.id}-${result.lastDate}`}
+                res={result}
+                onSaveTicket={saveTicket}
+              />
               <RealityPanel res={result} />
               <RankingTable res={result} />
               <PredictionLog res={result} />
@@ -479,7 +526,7 @@ export default function App() {
                 key={`t-${activeGame?.id}-${result.lastDate}-${result.drawCount}`}
                 res={result}
                 draws={draws}
-                savedTickets={activeGame?.savedTickets ?? []}
+                savedTickets={activeGame?.savedTickets ?? EMPTY_TICKETS}
                 onSaveTicket={saveTicket}
                 onRemoveTicket={removeTicket}
               />
@@ -526,6 +573,12 @@ export default function App() {
       )}
       {flash && !computing && !syncing && (
         <div className="computing">✓ {flash}</div>
+      )}
+      {updateReady && (
+        <div className="computing update-toast">
+          A new version is ready
+          <button className="btn primary sm" onClick={applyUpdate}>Refresh</button>
+        </div>
       )}
 
       <nav className="mobile-bar" aria-label="Quick actions">

@@ -1,0 +1,21 @@
+{
+  "updated": "2026-07-31T11:23:29.754Z",
+  "games": {
+    "powerball": {
+      "game": "powerball",
+      "drawDate": "2026-08-01",
+      "jackpot": 707000000,
+      "source": "https://www.powerball.com/",
+      "drawInstant": "2026-08-02T02:59:00.000Z",
+      "cashValue": 309700000
+    },
+    "megamillions": {
+      "game": "megamillions",
+      "drawDate": "2026-07-31",
+      "drawInstant": "2026-08-01T03:00:00.000Z",
+      "jackpot": 50000000,
+      "source": "https://www.megamillions.com/cmspages/utilservice.asmx/GetLatestDrawData",
+      "cashValue": 21500000
+    }
+  }
+}

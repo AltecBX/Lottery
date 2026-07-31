@@ -1,26 +1,27 @@
 import { useState } from 'react'
-import type { EngineResult } from '../engine/types.ts'
+import type { Draw, EngineResult } from '../engine/types.ts'
+import type { GameData } from '../engine/games.ts'
+import type { JackpotFeed } from '../engine/feed.ts'
 import { DOW_NAMES, formatDate } from '../engine/dates.ts'
+import { drawTimeLabel } from '../engine/drawtime.ts'
+import { NextDrawStrip } from './NextDraw.tsx'
 import { Ball, Tile, fmtPct } from './shared.tsx'
 
-function daysUntil(iso: string): number {
-  const [y, m, d] = iso.split('-').map(Number)
-  const target = new Date(y, m - 1, d)
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  return Math.round((target.getTime() - today.getTime()) / 86400000)
-}
-
-export function PredictionPanel({ res, gameName }: { res: EngineResult; gameName: string }) {
+export function PredictionPanel({ res, gameName, game, draws, drawTime, feed, onSetJackpot }: {
+  res: EngineResult
+  gameName: string
+  game: GameData | undefined
+  draws: Draw[]
+  drawTime: string
+  feed: JackpotFeed | null
+  onSetJackpot: (amount: number | null, forDate: string) => void
+}) {
   const [shared, setShared] = useState(false)
   const bt = res.backtest
   const D = res.drawSize
   const edge10 = bt.chance10 > 0 ? bt.ensemble10 / bt.chance10 : 1
   const recent = bt.points.slice(-100)
   const recent10 = recent.length ? recent.reduce((s, p) => s + p.hits10, 0) / recent.length : 0
-
-  const dUntil = daysUntil(res.nextDate)
-  const countdown = dUntil < 0 ? 'awaiting result — tap Sync' : dUntil === 0 ? 'draw day — tonight!' : dUntil === 1 ? 'tomorrow' : `in ${dUntil} days`
 
   const share = async () => {
     const picks = res.topPick.map((p) => p.number).join('-')
@@ -40,14 +41,23 @@ export function PredictionPanel({ res, gameName }: { res: EngineResult; gameName
     <section id="prediction" className="card hero-card section-anchor">
       <div className="hero-top">
         <h2 style={{ fontSize: 19 }}>Next draw prediction</h2>
-        <span className="countdown-chip">⏳ {countdown}</span>
         <span className="hero-date">
-          {DOW_NAMES[res.nextDow]}, {formatDate(res.nextDate)} · learned from {res.drawCount.toLocaleString()} draws
+          {DOW_NAMES[res.nextDow]}, {formatDate(res.nextDate)} · {drawTimeLabel(game?.syncKey, drawTime)} ·
+          {' '}learned from {res.drawCount.toLocaleString()} draws
         </span>
         <span style={{ marginLeft: 'auto' }}>
           <button className="btn sm" onClick={() => void share()}>{shared ? '✓ Copied' : '↗ Share picks'}</button>
         </span>
       </div>
+
+      <NextDrawStrip
+        res={res}
+        game={game}
+        draws={draws}
+        drawTime={drawTime}
+        feed={feed}
+        onSetJackpot={onSetJackpot}
+      />
 
       <div className="hero-cols">
         <div className="hero-balls">
