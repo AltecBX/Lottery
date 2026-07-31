@@ -387,6 +387,7 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
   const [drawSize, setDrawSize] = useState('')
   const [bonus, setBonus] = useState<'auto' | 'yes' | 'no'>('auto')
   const [specialMax, setSpecialMax] = useState('')
+  const [drawTime, setDrawTime] = useState('22:59')
 
   useEffect(() => {
     if (open) {
@@ -395,6 +396,7 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
       setDrawSize(settings.drawSize > 0 ? String(settings.drawSize) : '')
       setBonus(settings.bonus)
       setSpecialMax(settings.specialMax > 0 ? String(settings.specialMax) : '')
+      setDrawTime(settings.drawTime || '22:59')
     }
   }, [open, settings])
 
@@ -417,6 +419,7 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
               drawSize: Number.isInteger(ds) && ds >= 4 && ds <= 10 ? ds : 0,
               bonus,
               specialMax: Number.isInteger(sm) && sm > 1 && sm < 100 ? sm : 0,
+              drawTime: /^\d{2}:\d{2}$/.test(drawTime) ? drawTime : '22:59',
             })
           }}
         >
@@ -469,6 +472,14 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
           onChange={(e) => setSpecialMax(e.target.value.replace(/[^0-9]/g, ''))}
         />
         <span className="help">Set it if the top bonus number hasn't been drawn yet (e.g. a 1–26 Powerball where 26 never hit).</span>
+      </div>
+      <div className="field">
+        <label>Draw time (for the countdown)</label>
+        <input type="time" value={drawTime} onChange={(e) => setDrawTime(e.target.value)} />
+        <span className="help">
+          Drives the live countdown at the top. Powerball and Mega Millions use their official Eastern draw time
+          automatically; this applies to imported or custom games, read in your own timezone.
+        </span>
       </div>
       <div className="field">
         <label>Next draw date override</label>

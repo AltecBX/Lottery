@@ -17,6 +17,10 @@ export interface GameData {
   settings: Settings
   /** Tickets the user saved to auto-check against each new draw. */
   savedTickets?: SavedTicket[]
+  /** Advertised jackpot for the UPCOMING draw, typed by the user (overrides the estimate). */
+  nextJackpot?: number
+  /** Draw date that nextJackpot refers to, so it retires once that draw lands. */
+  nextJackpotFor?: string
 }
 
 export interface GamesState {
