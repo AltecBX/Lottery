@@ -33,6 +33,12 @@ export interface Settings {
   specialMax: number
   /** Local draw time as "HH:MM", used for the countdown when the game has no official time. */
   drawTime: string
+  /**
+   * Which draws to analyze. 'current' (the default) uses only the game's
+   * current rule era; 'all' uses the whole history. Nothing is ever deleted —
+   * this only chooses what the model sees.
+   */
+  era: 'current' | 'all'
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -43,6 +49,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bonus: 'auto',
   specialMax: 0,
   drawTime: '22:59',
+  era: 'current',
 }
 
 /** One prediction signal's normalized scores plus bookkeeping. */
@@ -288,8 +295,6 @@ export interface EngineResult {
   weightsLearned: boolean
   /** Bonus-ball prediction, when the dataset has one */
   special: SpecialResult | null
-  /** Set when the number pool appears to have changed over the history (rule change) */
-  eraNotice: { earlyMax: number; currentMax: number; cutoffDate: string; affected: number } | null
   /** Full-history repeat scan (exact + near repeats of winning combinations) */
   repeats: import('./repeats.ts').RepeatAnalysis | null
   /** True when the model's best combination has never been drawn in this history */

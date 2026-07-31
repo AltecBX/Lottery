@@ -7,6 +7,7 @@ import { analyzeRepeats } from '../engine/repeats.ts'
 import { analyzePositions, orderStatPmf, positionalFit } from '../engine/positions.ts'
 import { topIndices, topIndicesPartial } from '../engine/signals.ts'
 import { runEngine } from '../engine/engine.ts'
+import { detectEra, drawsForEra } from '../engine/era.ts'
 import { generateSampleDraws } from '../engine/sample.ts'
 import { choose, hitDistribution, jackpotOdds, matchOdds } from '../engine/odds.ts'
 import { attachSales, parseSalesRows, parseSocrataRows } from '../engine/sync.ts'
@@ -737,31 +738,85 @@ describe('multi-game model', () => {
 })
 
 describe('era detection', () => {
-  it('flags a mid-history pool change and points at the cutoff', () => {
-    let seed = 4242
-    const rand = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+  const seeded = (seed: number) => () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+
+  /** A history of `n` draws where the pools change at `changeAt`. */
+  const withEraChange = (
+    n: number, changeAt: number,
+    early: { main: number; special: number }, late: { main: number; special: number },
+  ): Draw[] => {
+    const rand = seeded(4242)
     const draws: Draw[] = []
-    for (let i = 0; i < 300; i++) {
-      const pool = i < 150 ? 59 : 69 // rule change halfway
+    for (let i = 0; i < n; i++) {
+      const rules = i < changeAt ? early : late
       const mains = new Set<number>()
-      while (mains.size < 5) mains.add(1 + Math.floor(rand() * pool))
-      const dt = new Date(2020, 0, 1 + Math.floor(i / 3) * 7 + [0, 2, 5][i % 3])
+      while (mains.size < 5) mains.add(1 + Math.floor(rand() * rules.main))
+      const dt = new Date(2010, 0, 1 + Math.floor(i / 3) * 7 + [0, 2, 5][i % 3])
       const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
       const sorted = [...mains].sort((a, b) => a - b)
-      draws.push({ date: iso, dow: dt.getDay(), numbers: sorted, sorted })
+      const draw: Draw = { date: iso, dow: dt.getDay(), numbers: sorted, sorted }
+      if (rules.special > 0) draw.special = 1 + Math.floor(rand() * rules.special)
+      draws.push(draw)
     }
-    const res = runEngine(draws, DEFAULT_SETTINGS)
-    expect(res.ok).toBe(true)
-    expect(res.eraNotice).not.toBeNull()
-    expect(res.eraNotice!.earlyMax).toBeLessThanOrEqual(59)
-    expect(res.eraNotice!.currentMax).toBeGreaterThan(59)
-    expect(res.eraNotice!.cutoffDate >= draws[140].date).toBe(true)
+    return draws
+  }
+
+  it('finds a pool that grew, from the long stretch that never reaches the new top', () => {
+    const draws = withEraChange(900, 450, { main: 59, special: 0 }, { main: 69, special: 0 })
+    const era = detectEra(draws)!
+    expect(era).not.toBeNull()
+    expect(era.earlyMax).toBeLessThanOrEqual(59)
+    expect(era.currentMax).toBe(69)
+    expect(era.cutoffIndex).toBeGreaterThanOrEqual(430)
+    expect(era.cutoffIndex).toBeLessThanOrEqual(470)
+    expect(era.kept + era.excluded).toBe(900)
+  })
+
+  it('finds a bonus pool that shrank — the Powerball 2015 case', () => {
+    // mains 59 -> 69 and the bonus ball 35 -> 26 on the same day
+    const draws = withEraChange(900, 450, { main: 59, special: 35 }, { main: 69, special: 26 })
+    const era = detectEra(draws)!
+    expect(era.currentSpecialMax).toBe(26)
+    expect(era.earlySpecialMax).toBeGreaterThan(26)
+    // The last draw exceeding the new bonus pool comes weeks before the change,
+    // so the boundary must be refined forward — never earlier than the real one.
+    expect(era.cutoffIndex).toBeGreaterThanOrEqual(450)
+    expect(era.cutoffIndex).toBeLessThanOrEqual(453)
+    // no draw in the kept era may be impossible under the current rules
+    for (const d of draws.slice(era.cutoffIndex)) {
+      expect(Math.max(...d.sorted)).toBeLessThanOrEqual(69)
+      expect(d.special!).toBeLessThanOrEqual(26)
+    }
   })
 
   it('stays quiet on a stable pool', () => {
-    const sample = generateSampleDraws()
-    const res = runEngine(sample, DEFAULT_SETTINGS)
-    expect(res.eraNotice).toBeNull()
+    expect(detectEra(generateSampleDraws())).toBeNull()
+    expect(detectEra(withEraChange(600, 600, { main: 69, special: 26 }, { main: 69, special: 26 }))).toBeNull()
+  })
+
+  it('refuses to split when it would leave too little history', () => {
+    expect(detectEra(withEraChange(300, 260, { main: 59, special: 0 }, { main: 69, special: 0 }))).toBeNull()
+    expect(detectEra([])).toBeNull()
+  })
+
+  it('filters without ever mutating or deleting the stored history', () => {
+    const draws = withEraChange(900, 450, { main: 59, special: 35 }, { main: 69, special: 26 })
+    const era = detectEra(draws)!
+    const current = drawsForEra(draws, 'current', era)
+    expect(current).toHaveLength(era.kept)
+    expect(drawsForEra(draws, 'all', era)).toHaveLength(900)
+    // the source array is untouched, so switching back in Settings restores everything
+    expect(draws).toHaveLength(900)
+    expect(drawsForEra(draws, 'current', null)).toHaveLength(900)
+  })
+
+  it('shrinks the detected pools to the current rules, which is what fixes the odds', () => {
+    const draws = withEraChange(900, 450, { main: 59, special: 35 }, { main: 69, special: 26 })
+    const all = runEngine(draws, { ...DEFAULT_SETTINGS, era: 'all' })
+    const current = runEngine(drawsForEra(draws, 'current', detectEra(draws)), DEFAULT_SETTINGS)
+    expect(all.special!.K).toBe(35)
+    expect(current.special!.K).toBe(26)
+    expect(current.drawCount).toBeLessThan(all.drawCount)
   })
 })
 

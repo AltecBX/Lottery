@@ -3,6 +3,7 @@ import type { Draw, Settings } from '../engine/types.ts'
 import { parseDelimitedText, parseMoney, rowsToDraws, type ParseOutcome } from '../engine/parse.ts'
 import { CSV_SOURCES, csvSourceUrl, fetchCsvSource, fetchOfficialResults, SYNC_SOURCES, type SyncKey } from '../engine/sync.ts'
 import { dowOf, DOW_NAMES, formatDate } from '../engine/dates.ts'
+import type { EraInfo } from '../engine/era.ts'
 
 function Dialog({ open, onClose, title, children, footer }: {
   open: boolean
@@ -370,7 +371,7 @@ export function AddResultDialog({ open, onClose, defaultDate, poolMax, drawSize,
 
 /* ---------------- Settings ---------------- */
 
-export function SettingsDialog({ open, onClose, settings, gameName, detectedPool, detectedSize, detectedSpecialMax, onSave, onClearAll, onRemoveGame }: {
+export function SettingsDialog({ open, onClose, settings, gameName, detectedPool, detectedSize, detectedSpecialMax, era, onSave, onClearAll, onRemoveGame }: {
   open: boolean
   onClose: () => void
   settings: Settings
@@ -378,6 +379,7 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
   detectedPool: number
   detectedSize: number
   detectedSpecialMax: number
+  era: EraInfo | null
   onSave: (s: Settings) => void
   onClearAll: () => void
   onRemoveGame: () => void
@@ -388,6 +390,7 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
   const [bonus, setBonus] = useState<'auto' | 'yes' | 'no'>('auto')
   const [specialMax, setSpecialMax] = useState('')
   const [drawTime, setDrawTime] = useState('22:59')
+  const [eraChoice, setEraChoice] = useState<'current' | 'all'>('current')
 
   useEffect(() => {
     if (open) {
@@ -397,6 +400,7 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
       setBonus(settings.bonus)
       setSpecialMax(settings.specialMax > 0 ? String(settings.specialMax) : '')
       setDrawTime(settings.drawTime || '22:59')
+      setEraChoice(settings.era ?? 'current')
     }
   }, [open, settings])
 
@@ -420,6 +424,7 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
               bonus,
               specialMax: Number.isInteger(sm) && sm > 1 && sm < 100 ? sm : 0,
               drawTime: /^\d{2}:\d{2}$/.test(drawTime) ? drawTime : '22:59',
+              era: eraChoice,
             })
           }}
         >
@@ -473,6 +478,30 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
         />
         <span className="help">Set it if the top bonus number hasn't been drawn yet (e.g. a 1–26 Powerball where 26 never hit).</span>
       </div>
+      {era && (
+        <div className="field">
+          <label>Which draws to analyze</label>
+          <select value={eraChoice} onChange={(e) => setEraChoice(e.target.value as 'current' | 'all')}>
+            <option value="current">
+              Current rules only — {era.kept.toLocaleString()} draws from {formatDate(era.cutoffDate)}
+            </option>
+            <option value="all">
+              Everything — all {(era.kept + era.excluded).toLocaleString()} draws, including older rules
+            </option>
+          </select>
+          <span className="help">
+            {gameName || 'This game'} changed its number pool on {formatDate(era.cutoffDate)}: mains went{' '}
+            {era.earlyMax} → {era.currentMax}
+            {era.currentSpecialMax > 0 && era.earlySpecialMax !== era.currentSpecialMax
+              ? `, bonus ball ${era.earlySpecialMax} → ${era.currentSpecialMax}`
+              : ''}
+            . The {era.excluded.toLocaleString()} earlier draws were played under rules that no longer exist, so they
+            inflate the pool size, the jackpot odds and every frequency stat — which is usually what an
+            implausibly large "model edge" turns out to be. Nothing is deleted either way; this only chooses what the
+            model reads, and you can switch back here at any time.
+          </span>
+        </div>
+      )}
       <div className="field">
         <label>Draw time (for the countdown)</label>
         <input type="time" value={drawTime} onChange={(e) => setDrawTime(e.target.value)} />

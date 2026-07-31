@@ -9,6 +9,7 @@ import {
   type GameData, type GamesState, type SavedTicket,
 } from './engine/games.ts'
 import { formatDate } from './engine/dates.ts'
+import { detectEra, drawsForEra } from './engine/era.ts'
 import { fetchJackpotFeed, type JackpotFeed } from './engine/feed.ts'
 import { useEngine } from './hooks/useEngine.ts'
 import { useLocalStorage, useTheme } from './hooks/useLocalStorage.ts'
@@ -35,7 +36,7 @@ import { ValuePanel } from './components/ValuePanel.tsx'
 import { RecapBanner } from './components/RecapBanner.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 import { AddGameDialog } from './components/AddGameDialog.tsx'
-import { JPMonogram, JerryLockup } from './components/Logo.tsx'
+import { BrandLockup, JerryLockup } from './components/Logo.tsx'
 
 const NAV = [
   ['prediction', 'Prediction'],
@@ -91,11 +92,18 @@ export default function App() {
 
   const games = gamesState.games
   const activeGame: GameData | undefined = games.find((g) => g.id === gamesState.activeId) ?? games[0]
-  const draws = activeGame?.draws ?? EMPTY_DRAWS
+  const allDraws = activeGame?.draws ?? EMPTY_DRAWS
   const settings = useMemo(
     () => ({ ...DEFAULT_SETTINGS, ...(activeGame?.settings ?? {}) }),
     [activeGame?.settings],
   )
+
+  // Draws from a superseded rule matrix inflate the pool, and with it the
+  // jackpot odds and every frequency stat, so by default only the current era
+  // is analyzed. This is a filter, never a delete — the full history stays in
+  // storage and Settings switches back to it at any time.
+  const era = useMemo(() => detectEra(allDraws), [allDraws])
+  const draws = useMemo(() => drawsForEra(allDraws, settings.era, era), [allDraws, settings.era, era])
 
   const { result, computing } = useEngine(draws, settings)
   // Read inside callbacks that must not re-create themselves on every recompute
@@ -267,12 +275,6 @@ export default function App() {
     updateActiveDraws((prev) => prev.filter((d) => !(d.date === draw.date && d.sorted.join(',') === draw.sorted.join(','))))
   }, [updateActiveDraws])
 
-  const trimToCurrentEra = useCallback((cutoffDate: string, affected: number) => {
-    if (!window.confirm(`Remove the ${affected.toLocaleString()} draws from before ${cutoffDate} (the old number pool)? Export a CSV first if you want a backup.`)) return
-    updateActiveDraws((prev) => prev.filter((d) => d.date >= cutoffDate))
-    say('Trimmed to the current era — model retrained on the modern pool only.')
-  }, [updateActiveDraws])
-
   const saveTicket = useCallback((ticket: SavedTicket) => {
     setGamesState((s) => {
       const active = s.games.find((x) => x.id === s.activeId) ?? s.games[0]
@@ -372,15 +374,9 @@ export default function App() {
       <header className="header">
         <div className="container">
           <div className="header-row">
-            <div className="brand">
-              <span className="brand-mark" aria-hidden="true">
-                <JPMonogram />
-              </span>
-              <h1 className="brand-word">
-                <span className="jerry">JERRY</span>
-                <span className="lab">Pattern Lab</span>
-              </h1>
-            </div>
+            <h1 className="brand">
+              <BrandLockup />
+            </h1>
             {games.length > 0 && (
               <div className="game-tabs" role="tablist" aria-label="Games">
                 {games.map((g) => (
@@ -479,19 +475,6 @@ export default function App() {
                   </div>
                   <button className="btn primary" onClick={() => void syncGame(activeGame!.id)} disabled={syncing}>
                     ⟳ Sync now
-                  </button>
-                </div>
-              )}
-              {result.eraNotice && (
-                <div className="notice warn era-banner">
-                  <div className="grow">
-                    <strong>Rule change detected:</strong> early draws only reach {result.eraNotice.earlyMax}, but recent ones reach{' '}
-                    {result.eraNotice.currentMax} — the game's number pool changed over your history. The{' '}
-                    {result.eraNotice.affected.toLocaleString()} old-pool draws bias every frequency stat (that's usually what an
-                    inflated "model edge" is). Recommended: keep only draws from {result.eraNotice.cutoffDate} on.
-                  </div>
-                  <button className="btn primary" onClick={() => trimToCurrentEra(result.eraNotice!.cutoffDate, result.eraNotice!.affected)}>
-                    Trim to current era
                   </button>
                 </div>
               )}
@@ -629,6 +612,7 @@ export default function App() {
         detectedPool={detectedPool}
         detectedSize={detectedSize}
         detectedSpecialMax={detectedSpecialMax}
+        era={era}
         onSave={(s) => { updateActiveSettings(s); setDialog('') }}
         onClearAll={() => { updateActiveDraws(() => []); setDialog('') }}
         onRemoveGame={removeActiveGame}

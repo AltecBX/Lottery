@@ -20,7 +20,7 @@ function emptyResult(message: string): EngineResult {
     ok: false, message, K: 0, drawSize: 0, drawCount: 0, firstDate: '', lastDate: '',
     scheduleDows: [], nextDate: '', nextDow: 0, inputSorted: true,
     predictions: [], topPick: [], top10: [], bestCombo: null, altCombos: [],
-    drivers: [], weightsLearned: false, special: null, eraNotice: null,
+    drivers: [], weightsLearned: false, special: null,
     repeats: null, bestComboIsNew: null, positionAnalysis: null, bestComboFit: null, weekdayTest: [],
     hot: [], cold: [], overdue: [], pairs: [], followers: [], dowProfiles: [],
     rising: [], falling: [], streaks: [], positions: [], similar: [],
@@ -97,22 +97,6 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
     specialKs = settings.specialMax > 0 ? settings.specialMax : maxS
     if (specialKs > 99 || maxS > specialKs) specialKs = 0
     if (specialKs > 0 && specialKs < 2) specialKs = 0
-  }
-
-  // Era check: has the number pool visibly changed over the history (rule change)?
-  let eraNotice: EngineResult['eraNotice'] = null
-  if (draws.length >= 200) {
-    const earlySlice = draws.slice(0, Math.floor(draws.length * 0.3))
-    let earlyMax = 0
-    for (const d of earlySlice) for (const n of d.sorted) earlyMax = Math.max(earlyMax, n)
-    if (maxObserved >= earlyMax + 6) {
-      let cutoffDate = ''
-      let cutoffIndex = 0
-      for (let i = 0; i < draws.length; i++) {
-        if (draws[i].sorted.some((n) => n > earlyMax)) { cutoffDate = draws[i].date; cutoffIndex = i; break }
-      }
-      eraNotice = { earlyMax, currentMax: maxObserved, cutoffDate, affected: cutoffIndex }
-    }
   }
 
   // ---- Walk-forward backtest (learns the ensemble weights, leak-free) ----
@@ -219,7 +203,6 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
     drivers,
     weightsLearned,
     special,
-    eraNotice,
     repeats,
     bestComboIsNew,
     positionAnalysis,
