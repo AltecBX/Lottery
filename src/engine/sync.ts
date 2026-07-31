@@ -62,7 +62,7 @@ export function parseSocrataRows(rows: SocrataRow[], key: SyncKey): ParseOutcome
   draws.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
   const warnings: string[] = []
   if (draws.length > 0) {
-    warnings.push('Official history includes old rule eras — if a "Rule change detected" banner appears after import, use "Trim to current era" for honest stats.')
+    warnings.push('Official history reaches back through older rule eras. Those draws are kept but not analyzed, since a retired number pool distorts the odds — Settings › "Which draws to analyze" switches between the current rules and everything.')
   }
   return {
     draws,
