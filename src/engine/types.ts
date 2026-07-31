@@ -10,6 +10,12 @@ export interface Draw {
   sorted: number[]
   /** Bonus/special ball (Powerball-style), drawn from its own pool */
   special?: number
+  /** Advertised jackpot for this draw, in dollars (optional — imported or typed) */
+  jackpot?: number
+  /** Where a jackpot ticket was sold, when this draw had a winner (optional) */
+  winnerLocation?: string
+  /** Statewide NY ticket sales in dollars for this draw day (synced, optional) */
+  sales?: number
 }
 
 export interface Settings {
@@ -285,6 +291,8 @@ export interface EngineResult {
   repeats: import('./repeats.ts').RepeatAnalysis | null
   /** True when the model's best combination has never been drawn in this history */
   bestComboIsNew: boolean | null
+  /** Chi-square verdict on whether each draw weekday has its own number bias */
+  weekdayTest: { dow: number; draws: number; chi2: number; dof: number; z: number }[]
   /** Per-column (order-statistic) analysis: each draw column vs its own history */
   positionAnalysis: import('./positions.ts').PositionAnalysis | null
   /** How the best combination's column shape compares to that history */

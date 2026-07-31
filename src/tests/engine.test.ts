@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseDateToken } from '../engine/dates.ts'
-import { mergeDraws, parseDelimitedText, rowsToDraws } from '../engine/parse.ts'
+import { drawsToCsv, mergeDraws, parseDelimitedText, parseMoney, rowsToDraws, splitDelimited } from '../engine/parse.ts'
 import { HistoryState } from '../engine/state.ts'
 import { isotonicDecreasing, runBacktest } from '../engine/backtest.ts'
 import { analyzeRepeats } from '../engine/repeats.ts'
@@ -9,7 +9,8 @@ import { topIndices, topIndicesPartial } from '../engine/signals.ts'
 import { runEngine } from '../engine/engine.ts'
 import { generateSampleDraws } from '../engine/sample.ts'
 import { choose, hitDistribution, jackpotOdds, matchOdds } from '../engine/odds.ts'
-import { parseSocrataRows } from '../engine/sync.ts'
+import { attachSales, parseSalesRows, parseSocrataRows } from '../engine/sync.ts'
+import { analyzeJackpots, ticketValue, US_LOWER_TIERS } from '../engine/jackpot.ts'
 import { createGame, daysSinceLastDraw, migrateLegacy } from '../engine/games.ts'
 import { DEFAULT_SETTINGS } from '../engine/types.ts'
 import type { Draw } from '../engine/types.ts'
@@ -434,6 +435,132 @@ describe('column (order-statistic) analysis', () => {
     expect(res.bestComboFit).not.toBeNull()
     // the builder should not propose a shape this history has never produced
     expect(res.bestComboFit!.impossibleColumns).toHaveLength(0)
+  })
+})
+
+describe('jackpot, winner location and sales', () => {
+  it('parses money in every common shape', () => {
+    expect(parseMoney('$1,020,000,000')).toBe(1_020_000_000)
+    expect(parseMoney('1.02B')).toBeCloseTo(1.02e9, 3)
+    expect(parseMoney('245M')).toBe(245_000_000)
+    expect(parseMoney('$90 million')).toBe(90_000_000)
+    expect(parseMoney(75_000_000)).toBe(75_000_000)
+    expect(parseMoney('')).toBeNull()
+    expect(parseMoney('rolled over')).toBeNull()
+    expect(parseMoney(0)).toBeNull()
+  })
+
+  it('reads jackpot and winner-location columns without disturbing the numbers', () => {
+    const text = [
+      'Draw Date,Day,First,Second,Third,Fourth,Fifth,Pball,Jackpot,Winner Location',
+      '07/29/2026,Wednesday,30,36,40,42,57,2,"$1,200,000",',
+      '07/27/2026,Monday,6,26,46,58,65,25,"$980,000,000",Middlebury VT',
+    ].join('\n')
+    const out = parseDelimitedText(text)
+    expect(out.drawSize).toBe(5)
+    expect(out.hasSpecial).toBe(true)
+    expect(out.draws).toHaveLength(2)
+    const monday = out.draws.find((d) => d.date === '2026-07-27')!
+    expect(monday.sorted).toEqual([6, 26, 46, 58, 65])
+    expect(monday.special).toBe(25)
+    expect(monday.jackpot).toBe(980_000_000)
+    expect(monday.winnerLocation).toBe('Middlebury VT')
+    // blank location must not become a phantom winner
+    expect(out.draws.find((d) => d.date === '2026-07-29')!.winnerLocation).toBeUndefined()
+  })
+
+  it('CSV export round-trips jackpot and winner location', () => {
+    const draws: Draw[] = [
+      { ...D('2026-07-27', [6, 26, 46, 58, 65]), special: 25, jackpot: 980_000_000, winnerLocation: 'Middlebury, VT' },
+      { ...D('2026-07-29', [30, 36, 40, 42, 57]), special: 2 },
+    ]
+    const csv = drawsToCsv(draws)
+    const header = csv.split('\n')[0].split(',')
+    expect(header).toContain('Jackpot')
+    expect(header).toContain('Winner Location')
+    // every row must carry exactly as many fields as the header declares
+    const rows = csv.split('\n').slice(1)
+    for (const r of rows) expect(splitDelimited(r)[0]).toHaveLength(header.length)
+    const back = parseDelimitedText(csv)
+    expect(back.errors).toEqual([])
+    const won = back.draws.find((d) => d.date === '2026-07-27')!
+    expect(won.jackpot).toBe(980_000_000)
+    expect(won.winnerLocation).toBe('Middlebury, VT')
+    expect(back.draws.find((d) => d.date === '2026-07-29')!.winnerLocation).toBeUndefined()
+  })
+
+  it('sales rows map to a date lookup and attach only where dates line up', () => {
+    const sales = parseSalesRows([
+      { bus_day: '2026-07-29T00:00:00.000', total: '2299478' },
+      { bus_day: '2026-07-28T00:00:00.000', total: '928668' },
+      { bus_day: 'bad', total: '5' },
+      { bus_day: '2026-07-27T00:00:00.000', total: '0' },
+    ])
+    expect(sales.size).toBe(2)
+    expect(sales.get('2026-07-29')).toBe(2299478)
+    const draws = [D('2026-07-29', [1, 2, 3, 4, 5]), D('2026-07-27', [6, 7, 8, 9, 10])]
+    const { draws: withSales, matched } = attachSales(draws, sales)
+    expect(matched).toBe(1)
+    expect(withSales[0].sales).toBe(2299478)
+    expect(withSales[1].sales).toBeUndefined()
+  })
+
+  it('merging the same draw again fills in jackpot/location/sales without duplicating', () => {
+    const base = [D('2026-07-27', [6, 26, 46, 58, 65])]
+    const richer = [{ ...D('2026-07-27', [6, 26, 46, 58, 65]), jackpot: 9.8e8, winnerLocation: 'VT', sales: 123 }]
+    const { merged, added, skipped } = mergeDraws(base, richer)
+    expect(added).toBe(0)
+    expect(skipped).toBe(1)
+    expect(merged).toHaveLength(1)
+    expect(merged[0].jackpot).toBe(9.8e8)
+    expect(merged[0].winnerLocation).toBe('VT')
+    expect(merged[0].sales).toBe(123)
+  })
+
+  it('summarises jackpots and finds no link between jackpot size and the numbers', () => {
+    const draws = fairRandomDraws(11, 240, 69, 5).map((d, i) => ({
+      ...d,
+      // jackpot unrelated to the numbers, so the test must come back null-effect
+      jackpot: 20_000_000 + (i % 30) * 40_000_000,
+      ...(i === 239 ? { winnerLocation: 'Buffalo NY' } : {}),
+    }))
+    const j = analyzeJackpots(draws)
+    expect(j.withJackpot).toBe(240)
+    expect(j.biggest!.amount).toBe(20_000_000 + 29 * 40_000_000)
+    expect(j.winners).toHaveLength(1)
+    expect(j.rolloverRun).toBe(0)
+    expect(j.jackpotVsNumbers).not.toBeNull()
+    expect(Math.abs(j.jackpotVsNumbers!.t)).toBeLessThan(2)
+  })
+
+  it('ticket value: bigger jackpots raise EV, and heavy sales discount it for sharing', () => {
+    const solo = ticketValue(69, 5, 26, 100_000_000, null, 2, US_LOWER_TIERS)
+    const bigger = ticketValue(69, 5, 26, 900_000_000, null, 2, US_LOWER_TIERS)
+    expect(bigger.grossEv).toBeGreaterThan(solo.grossEv)
+    expect(solo.splitChance).toBeNull()
+    const crowded = ticketValue(69, 5, 26, 900_000_000, 400_000_000, 2, US_LOWER_TIERS)
+    expect(crowded.splitChance).toBeGreaterThan(0.7)
+    expect(crowded.adjustedEv).toBeLessThan(bigger.grossEv)
+    expect(bigger.jackpotOdds).toBe(292_201_338)
+  })
+})
+
+describe('weekday significance', () => {
+  it('reports ordinary variation on fair draws and flags a planted bias', () => {
+    const fair = runEngine(fairRandomDraws(3, 600, 49, 6), DEFAULT_SETTINGS)
+    expect(fair.weekdayTest.length).toBeGreaterThan(0)
+    for (const t of fair.weekdayTest) expect(Math.abs(t.z)).toBeLessThan(3)
+
+    // Force number 7 into every Friday draw — the test must notice
+    const rigged = fairRandomDraws(4, 600, 49, 6).map((d) => {
+      if (d.dow !== 5) return d
+      const nums = [7, ...d.sorted.filter((n) => n !== 7)].slice(0, 6)
+      return { ...d, numbers: [...nums].sort((a, b) => a - b), sorted: [...nums].sort((a, b) => a - b) }
+    })
+    const res = runEngine(rigged, DEFAULT_SETTINGS)
+    const fri = res.weekdayTest.find((t) => t.dow === 5)
+    expect(fri).toBeDefined()
+    expect(fri!.z).toBeGreaterThan(3)
   })
 })
 

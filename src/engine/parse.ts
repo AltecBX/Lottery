@@ -89,9 +89,30 @@ interface PendingRow {
   dow: number
   dowMismatch: boolean
   numerics: number[]
+  jackpot?: number
+  winnerLocation?: string
 }
 
 const BONUS_HEADER = /p(ower)?[\s_-]?ball|pball|bonus|mega[\s_-]?ball|extra|star|lucky|\bpb\b|\bsb\b/i
+const JACKPOT_HEADER = /jackpot|annuity|cash\s*value|grand\s*prize|top\s*prize|\bprize\b|advertised/i
+const LOCATION_HEADER = /winner|location|won\s*(in|at)|city|state|retailer|store/i
+
+/**
+ * Read a money cell: "$1,020,000,000", "1.02B", "245M", "1020000000".
+ * Returns null when the cell is not a usable amount.
+ */
+export function parseMoney(cell: unknown): number | null {
+  if (typeof cell === 'number') return Number.isFinite(cell) && cell > 0 ? cell : null
+  const raw = String(cell ?? '').trim()
+  if (raw === '') return null
+  const m = raw.match(/^\$?\s*([\d,]+(?:\.\d+)?)\s*(billion|million|thousand|[bmk])?\b/i)
+  if (!m) return null
+  const n = Number(m[1].replace(/,/g, ''))
+  if (!Number.isFinite(n) || n <= 0) return null
+  const unit = (m[2] ?? '').toLowerCase()
+  const mult = unit.startsWith('b') ? 1e9 : unit.startsWith('m') ? 1e6 : unit.startsWith('k') || unit.startsWith('t') ? 1e3 : 1
+  return n * mult
+}
 
 /**
  * Interpret rows of cells as draw history.
@@ -108,15 +129,45 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto
   if (rows.length === 0) return { draws: [], errors: ['No rows found in the file.'], warnings, drawSize: 0, hasSpecial: false }
 
   let bonusHeaderHit = false
+  // Jackpot / winner-location columns are found by header only: guessing from
+  // values could swallow a real number column and corrupt the draw size.
+  let jackpotIdx = -1
+  let locationIdx = -1
   if (isHeaderRow(rows[0])) {
     const header = rows[0]
-    for (let i = header.length - 1; i >= 0; i--) {
+    for (let i = 0; i < header.length; i++) {
       const cell = String(header[i]).trim()
       if (cell === '') continue
+      if (jackpotIdx < 0 && JACKPOT_HEADER.test(cell)) jackpotIdx = i
+      else if (locationIdx < 0 && LOCATION_HEADER.test(cell) && !BONUS_HEADER.test(cell)) locationIdx = i
+    }
+    for (let i = header.length - 1; i >= 0; i--) {
+      const cell = String(header[i]).trim()
+      if (cell === '' || i === jackpotIdx || i === locationIdx) continue
       bonusHeaderHit = BONUS_HEADER.test(cell)
       break
     }
     rows = rows.slice(1)
+  }
+  // Lift those columns out so the numeric scan below never sees them
+  const extras: { jackpot?: number; winnerLocation?: string }[] = []
+  if (jackpotIdx >= 0 || locationIdx >= 0) {
+    rows = rows.map((r) => {
+      const copy = [...r]
+      const extra: { jackpot?: number; winnerLocation?: string } = {}
+      if (jackpotIdx >= 0) {
+        const amount = parseMoney(copy[jackpotIdx])
+        if (amount !== null) extra.jackpot = amount
+        copy[jackpotIdx] = ''
+      }
+      if (locationIdx >= 0) {
+        const loc = String(copy[locationIdx] ?? '').trim()
+        if (loc !== '' && !/^(n\/?a|none|-{1,2})$/i.test(loc)) extra.winnerLocation = loc
+        copy[locationIdx] = ''
+      }
+      extras.push(extra)
+      return copy
+    })
   }
   if (rows.length === 0) return { draws: [], errors: ['Only a header row was found.'], warnings, drawSize: 0, hasSpecial: false }
 
@@ -175,7 +226,8 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto
       }
       if (numerics.length < MAX_DRAW_SIZE + 2) numerics.push(n)
     }
-    pending.push({ line, iso, dow, dowMismatch, numerics })
+    const extra = extras[idx]
+    pending.push({ line, iso, dow, dowMismatch, numerics, jackpot: extra?.jackpot, winnerLocation: extra?.winnerLocation })
     if (dowMismatch) dowMismatches++
   })
 
@@ -274,8 +326,12 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto
     seen.add(key)
     const draw: Draw = { date: p.iso, dow: p.dow, numbers: nums, sorted }
     if (special !== undefined) draw.special = special
+    if (p.jackpot !== undefined) draw.jackpot = p.jackpot
+    if (p.winnerLocation !== undefined) draw.winnerLocation = p.winnerLocation
     draws.push(draw)
   }
+  const withJackpot = draws.filter((d) => d.jackpot !== undefined).length
+  if (withJackpot > 0) warnings.push(`Read a jackpot amount for ${withJackpot.toLocaleString()} draw(s) — see the Jackpot & players panel.`)
 
   if (hasSpecial) {
     warnings.push(`Detected ${drawSize} main numbers + a bonus ball column — the bonus is analyzed in its own pool. (Wrong? Set "Bonus ball" in Settings and re-import.)`)
@@ -300,12 +356,21 @@ export function parseDelimitedText(text: string, expectedSize = 0, bonusMode: 'a
 /** Merge new draws into existing history, skipping exact duplicates. */
 export function mergeDraws(existing: Draw[], incoming: Draw[]): { merged: Draw[]; added: number; skipped: number } {
   const key = (d: Draw) => `${d.date}|${d.sorted.join(',')}|${d.special ?? ''}`
-  const have = new Set(existing.map(key))
+  const byKey = new Map(existing.map((d) => [key(d), d]))
   const merged = [...existing]
   let added = 0, skipped = 0
   for (const d of incoming) {
-    if (have.has(key(d))) { skipped++; continue }
-    have.add(key(d))
+    const k = key(d)
+    const prev = byKey.get(k)
+    if (prev) {
+      // Same draw seen again: fill in any extra detail it now carries
+      if (d.jackpot !== undefined && prev.jackpot === undefined) prev.jackpot = d.jackpot
+      if (d.winnerLocation !== undefined && prev.winnerLocation === undefined) prev.winnerLocation = d.winnerLocation
+      if (d.sales !== undefined && prev.sales === undefined) prev.sales = d.sales
+      skipped++
+      continue
+    }
+    byKey.set(k, d)
     merged.push(d)
     added++
   }
@@ -317,8 +382,22 @@ export function mergeDraws(existing: Draw[], incoming: Draw[]): { merged: Draw[]
 export function drawsToCsv(draws: Draw[]): string {
   const n = draws.length > 0 ? draws[0].numbers.length : 5
   const hasSpecial = draws.some((d) => d.special !== undefined)
-  const head = ['Date', 'Day of Week', ...Array.from({ length: n }, (_, i) => `Number ${i + 1}`), ...(hasSpecial ? ['Bonus'] : [])].join(',')
+  const hasJackpot = draws.some((d) => d.jackpot !== undefined)
+  const hasLocation = draws.some((d) => d.winnerLocation)
+  const head = [
+    'Date', 'Day of Week',
+    ...Array.from({ length: n }, (_, i) => `Number ${i + 1}`),
+    ...(hasSpecial ? ['Bonus'] : []),
+    ...(hasJackpot ? ['Jackpot'] : []),
+    ...(hasLocation ? ['Winner Location'] : []),
+  ].join(',')
   const dows = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-  const lines = draws.map((d) => `${d.date},${dows[d.dow]},${d.numbers.join(',')}${hasSpecial ? ',' + (d.special ?? '') : ''}`)
+  const quote = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s)
+  const lines = draws.map((d) =>
+    `${d.date},${dows[d.dow]},${d.numbers.join(',')}` +
+    (hasSpecial ? ',' + (d.special ?? '') : '') +
+    (hasJackpot ? ',' + (d.jackpot ?? '') : '') +
+    (hasLocation ? ',' + quote(d.winnerLocation ?? '') : ''),
+  )
   return [head, ...lines].join('\n')
 }

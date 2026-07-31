@@ -3,7 +3,7 @@ import type { Draw, Settings } from './engine/types.ts'
 import { DEFAULT_SETTINGS } from './engine/types.ts'
 import { mergeDraws } from './engine/parse.ts'
 import { generateSampleDraws } from './engine/sample.ts'
-import { fetchOfficialResults, type SyncKey } from './engine/sync.ts'
+import { attachSales, fetchOfficialResults, fetchSalesByDay, type SyncKey } from './engine/sync.ts'
 import {
   createGame, daysSinceLastDraw, migrateLegacy, OFFICIAL_GAMES,
   type GameData, type GamesState, type SavedTicket,
@@ -25,6 +25,7 @@ import { PredictionLog } from './components/PredictionLog.tsx'
 import { RealityPanel } from './components/RealityPanel.tsx'
 import { RepeatsPanel } from './components/RepeatsPanel.tsx'
 import { PositionsPanel } from './components/PositionsPanel.tsx'
+import { JackpotPanel } from './components/JackpotPanel.tsx'
 import { InspectorPanel } from './components/InspectorPanel.tsx'
 import { TicketLab } from './components/TicketLab.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
@@ -37,6 +38,7 @@ const NAV = [
   ['log', 'Prediction log'],
   ['columns', 'Columns'],
   ['repeats', 'Repeats'],
+  ['jackpot', 'Jackpot'],
   ['reality', 'Reality check'],
   ['ticket', 'Ticket lab'],
   ['inspector', 'Inspector'],
@@ -138,6 +140,22 @@ export default function App() {
   const existingDates = useMemo(() => new Set(draws.map((d) => d.date)), [draws])
   const hasData = draws.length > 0
 
+  /**
+   * Ticket sales come from a server-side aggregate that can take ~10s, so it
+   * never blocks a results sync — results land first, sales fill in after.
+   * Skipped when the newest draw already carries a figure.
+   */
+  const hydrateSales = useCallback(async (gameId: string, key: SyncKey) => {
+    try {
+      const sales = await fetchSalesByDay(key)
+      if (sales.size === 0) return
+      setGamesState((s) => ({
+        ...s,
+        games: s.games.map((g) => (g.id === gameId ? { ...g, draws: attachSales(g.draws, sales).draws } : g)),
+      }))
+    } catch { /* sales are optional context — never surface a failure */ }
+  }, [setGamesState])
+
   /** Fetch a game's official history and merge any new draws in. */
   const syncGame = useCallback(async (gameId: string, silentWhenCurrent = false) => {
     const game = gamesState.games.find((g) => g.id === gameId)
@@ -155,6 +173,7 @@ export default function App() {
       updateGame(gameId, (g) => ({ ...g, draws: merged.merged }))
       if (merged.added > 0) say(`${game.name}: ${merged.added} new draw${merged.added === 1 ? '' : 's'} added — model retrained.`)
       else if (!silentWhenCurrent) say(`${game.name} is already up to date.`)
+      void hydrateSales(gameId, game.syncKey)
     } catch (err) {
       say(`Sync failed: ${err instanceof Error ? err.message : String(err)}`)
     } finally {
@@ -179,6 +198,7 @@ export default function App() {
       const game: GameData = { ...createGame(key, meta.name, key), draws: outcome.draws }
       setGamesState((s) => ({ games: [...s.games, game], activeId: game.id }))
       setDialog('')
+      void hydrateSales(game.id, key)
       say(`${meta.name} set up — ${outcome.draws.length.toLocaleString()} official draws loaded.`)
     } catch (err) {
       say(`Could not set up ${meta.name}: ${err instanceof Error ? err.message : String(err)}`)
@@ -442,6 +462,7 @@ export default function App() {
               <PredictionLog res={result} />
               <PositionsPanel res={result} />
               <RepeatsPanel res={result} />
+              <JackpotPanel res={result} draws={draws} />
               <TicketLab
                 key={`t-${activeGame?.id}-${result.lastDate}-${result.drawCount}`}
                 res={result}

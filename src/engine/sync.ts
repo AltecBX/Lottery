@@ -80,3 +80,47 @@ export async function fetchOfficialResults(key: SyncKey): Promise<ParseOutcome> 
   const rows = (await resp.json()) as SocrataRow[]
   return parseSocrataRows(rows, key)
 }
+
+/**
+ * Statewide New York ticket sales per day, aggregated server-side from the
+ * retailer sales dataset (xyvi-fbb9, daily from 2024). Sales are the closest
+ * public measure of how many people actually played a given draw — which is
+ * what decides whether a jackpot gets split, not which numbers come up.
+ */
+const SALES_URL = 'https://data.ny.gov/resource/xyvi-fbb9.json'
+const SALES_COLUMN: Record<SyncKey, string> = { powerball: 'powerball', megamillions: 'mega' }
+
+interface SalesRow { bus_day?: string; total?: string }
+
+/** Map raw aggregated sales rows to a date → dollars lookup. Pure, for tests. */
+export function parseSalesRows(rows: SalesRow[]): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const r of rows) {
+    const date = (r.bus_day ?? '').slice(0, 10)
+    const amount = Number(r.total)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(amount) || amount <= 0) continue
+    out.set(date, amount)
+  }
+  return out
+}
+
+export async function fetchSalesByDay(key: SyncKey): Promise<Map<string, number>> {
+  const col = SALES_COLUMN[key]
+  const url =
+    `${SALES_URL}?$select=bus_day,sum(${col})%20as%20total&$group=bus_day&$order=bus_day%20DESC&$limit=5000`
+  const resp = await fetch(url, { headers: { Accept: 'application/json' } })
+  if (!resp.ok) throw new Error(`sales source responded ${resp.status}`)
+  return parseSalesRows((await resp.json()) as SalesRow[])
+}
+
+/** Attach sales figures to the draws that have them; leaves the rest untouched. */
+export function attachSales(draws: Draw[], sales: Map<string, number>): { draws: Draw[]; matched: number } {
+  let matched = 0
+  const out = draws.map((d) => {
+    const amount = sales.get(d.date)
+    if (amount === undefined) return d
+    matched++
+    return { ...d, sales: amount }
+  })
+  return { draws: out, matched }
+}
