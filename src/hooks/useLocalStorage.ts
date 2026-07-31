@@ -24,7 +24,7 @@ export function useLocalStorage<T>(key: string, initial: T): [T, (v: T | ((prev:
 export type ThemeChoice = 'auto' | 'light' | 'dark'
 
 export function useTheme(): [ThemeChoice, () => void] {
-  const [choice, setChoice] = useLocalStorage<ThemeChoice>('patternlab.theme', 'auto')
+  const [choice, setChoice] = useLocalStorage<ThemeChoice>('patternlab.theme', 'dark')
 
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')

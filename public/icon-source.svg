@@ -1,137 +1,93 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <defs>
-    <radialGradient id="bg" cx="0.5" cy="0.42" r="0.9">
-      <stop offset="0" stop-color="#101b3f"/>
-      <stop offset="0.55" stop-color="#070c22"/>
-      <stop offset="1" stop-color="#020308"/>
+    <radialGradient id="bg" cx="0.5" cy="0.32" r="0.95">
+      <stop offset="0" stop-color="#101d3c"/>
+      <stop offset="0.55" stop-color="#0a1226"/>
+      <stop offset="1" stop-color="#050810"/>
     </radialGradient>
-    <linearGradient id="ringL" x1="0" y1="1" x2="0.2" y2="0">
-      <stop offset="0" stop-color="#1660ff"/>
-      <stop offset="1" stop-color="#37b6ff"/>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe08a"/>
+      <stop offset="0.55" stop-color="#e8a91f"/>
+      <stop offset="1" stop-color="#b87709"/>
     </linearGradient>
-    <linearGradient id="ringR" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#b44bff"/>
-      <stop offset="0.5" stop-color="#ff9d2e"/>
-      <stop offset="1" stop-color="#ffcf4d"/>
-    </linearGradient>
-    <radialGradient id="white" cx="0.35" cy="0.28" r="1">
+    <linearGradient id="silver" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.62" stop-color="#eef1f7"/>
-      <stop offset="1" stop-color="#aab4c8"/>
+      <stop offset="0.6" stop-color="#c9d3e2"/>
+      <stop offset="1" stop-color="#8e9bb1"/>
+    </linearGradient>
+    <linearGradient id="ringBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2e7fe8"/>
+      <stop offset="1" stop-color="#55b0ff"/>
+    </linearGradient>
+    <linearGradient id="ringGold" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#d89522"/>
+      <stop offset="1" stop-color="#f2c155"/>
+    </linearGradient>
+    <radialGradient id="ballW" cx="0.33" cy="0.28" r="0.9">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.55" stop-color="#eef2f8"/>
+      <stop offset="0.85" stop-color="#c5d0e2"/>
+      <stop offset="1" stop-color="#a3b2ca"/>
     </radialGradient>
-    <radialGradient id="redb" cx="0.35" cy="0.3" r="1">
-      <stop offset="0" stop-color="#ff8a75"/>
-      <stop offset="0.45" stop-color="#e02f22"/>
-      <stop offset="1" stop-color="#7c0b06"/>
+    <radialGradient id="ballR" cx="0.33" cy="0.28" r="0.9">
+      <stop offset="0" stop-color="#ff9a88"/>
+      <stop offset="0.5" stop-color="#ee4f41"/>
+      <stop offset="0.85" stop-color="#c22a1e"/>
+      <stop offset="1" stop-color="#8f1a10"/>
     </radialGradient>
-    <radialGradient id="galaxy" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#ffd9a0"/>
-      <stop offset="0.4" stop-color="#ff9a3d" stop-opacity="0.75"/>
-      <stop offset="1" stop-color="#ff9a3d" stop-opacity="0"/>
-    </radialGradient>
-    <filter id="glow8" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="8"/></filter>
-    <filter id="glow4" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="4"/></filter>
-    <filter id="glow14" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="14"/></filter>
+    <filter id="glowB" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="9"/>
+    </filter>
+    <filter id="softSh" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#000000" flood-opacity="0.45"/>
+    </filter>
   </defs>
 
-  <rect width="512" height="512" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="104" fill="url(#bg)"/>
 
-  <g fill="#ffffff">
-    <circle cx="60" cy="70" r="2.4" opacity="0.8"/><circle cx="120" cy="40" r="1.6" opacity="0.6"/>
-    <circle cx="210" cy="66" r="1.8" opacity="0.7"/><circle cx="300" cy="38" r="2.2" opacity="0.8"/>
-    <circle cx="470" cy="60" r="1.8" opacity="0.6"/><circle cx="40" cy="200" r="1.6" opacity="0.5"/>
-    <circle cx="488" cy="180" r="2" opacity="0.6"/><circle cx="380" cy="52" r="1.4" opacity="0.7"/>
-    <circle cx="150" cy="120" r="1.4" opacity="0.5"/><circle cx="452" cy="250" r="1.6" opacity="0.5"/>
-    <circle cx="30" cy="300" r="1.8" opacity="0.5"/><circle cx="256" cy="26" r="1.8" opacity="0.7"/>
+  <!-- faint starfield -->
+  <g fill="#9db8e8">
+    <circle cx="70" cy="90" r="2" opacity="0.5"/>
+    <circle cx="440" cy="70" r="1.6" opacity="0.4"/>
+    <circle cx="470" cy="200" r="2" opacity="0.35"/>
+    <circle cx="50" cy="260" r="1.6" opacity="0.4"/>
+    <circle cx="420" cy="330" r="1.7" opacity="0.3"/>
+    <circle cx="120" cy="45" r="1.4" opacity="0.4"/>
+    <circle cx="330" cy="38" r="1.5" opacity="0.35"/>
+    <circle cx="88" cy="330" r="1.8" opacity="0.3"/>
   </g>
 
-  <g opacity="0.5" stroke="#f5b91e" stroke-width="2" fill="none">
-    <path d="M96 58l22 12v26l-22 13-23-13V70z"/>
-    <path d="M150 40l18 10v21l-18 11-19-11V50z" opacity="0.7"/>
-  </g>
-  <g fill="#3f9dff" opacity="0.55" font-family="system-ui, sans-serif" font-size="15" font-weight="600">
-    <text x="26" y="150">11 20 33 42</text>
-    <text x="26" y="172">02 18 27 39</text>
-    <text x="26" y="194">04 15 29 41</text>
-    <text x="26" y="216" opacity="0.6">07 17 25 38</text>
-  </g>
-  <g opacity="0.6">
-    <g fill="#b44bff">
-      <circle cx="446" cy="300" r="3.4"/><circle cx="460" cy="300" r="3.4"/><circle cx="474" cy="300" r="3.4"/><circle cx="488" cy="300" r="3.4"/>
-      <circle cx="446" cy="314" r="3.4"/><circle cx="460" cy="314" r="3.4"/><circle cx="474" cy="314" r="3.4"/>
-    </g>
-    <g fill="#f5b91e">
-      <circle cx="446" cy="328" r="3.4"/><circle cx="460" cy="328" r="3.4"/><circle cx="474" cy="328" r="3.4"/><circle cx="488" cy="328" r="3.4"/>
-      <circle cx="446" cy="342" r="3.4"/><circle cx="460" cy="342" r="3.4"/>
-    </g>
+  <!-- rising chart line behind the ring -->
+  <g opacity="0.5">
+    <path d="M120 300 L180 250 L230 272 L300 190 L372 214 L398 150" stroke="#2e7fe8" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+    <path d="M398 150 l-4 22 M398 150 l-21 8" stroke="#55b0ff" stroke-width="7" stroke-linecap="round" opacity="0.55"/>
   </g>
 
-  <g transform="translate(424 108) rotate(-24)">
-    <ellipse cx="0" cy="0" rx="64" ry="26" fill="url(#galaxy)" filter="url(#glow8)"/>
-    <ellipse cx="0" cy="0" rx="40" ry="14" fill="none" stroke="#ffce8a" stroke-width="3" opacity="0.8" filter="url(#glow4)"/>
-    <circle cx="0" cy="0" r="7" fill="#fff2d9"/>
+  <!-- analysis ring -->
+  <circle cx="256" cy="212" r="152" stroke="url(#ringBlue)" stroke-width="13" fill="none" opacity="0.55" filter="url(#glowB)"/>
+  <circle cx="256" cy="212" r="152" stroke="url(#ringBlue)" stroke-width="11" fill="none"/>
+  <path d="M 256 60 A 152 152 0 0 1 405.3 183.6" stroke="url(#ringGold)" stroke-width="13" fill="none" stroke-linecap="round"/>
+  <circle cx="141.6" cy="303.2" r="9" fill="#f2c155"/>
+
+  <!-- JP monogram (scaled from the 100-box mark) -->
+  <g transform="translate(256 208) scale(3.55) translate(-50 -49)" filter="url(#softSh)">
+    <path d="M38.5 26 H47 V59.5 C47 66.8 41.8 72 34.6 72 C28 72 22.9 67.6 22 60.9 L30 59.6 C30.5 62.9 32.3 64.6 34.8 64.6 C37.2 64.6 38.5 62.9 38.5 59.8 Z" fill="url(#gold)"/>
+    <path fill-rule="evenodd" d="M53 26 H66.5 C74.5 26 80 31.4 80 39 C80 46.6 74.5 52 66.5 52 H61.5 V72 H53 Z M61.5 33.4 V44.6 H66 C69.8 44.6 72 42.4 72 39 C72 35.6 69.8 33.4 66 33.4 Z" fill="url(#silver)"/>
   </g>
 
-  <g fill="none" stroke-linecap="round">
-    <path d="M256 78 A140 140 0 0 0 118 240" stroke="url(#ringL)" stroke-width="16" filter="url(#glow8)"/>
-    <path d="M256 78 A140 140 0 0 0 118 240" stroke="url(#ringL)" stroke-width="7"/>
-    <path d="M256 78 A140 140 0 0 1 394 240 A140 140 0 0 1 300 350" stroke="url(#ringR)" stroke-width="16" filter="url(#glow8)"/>
-    <path d="M256 78 A140 140 0 0 1 394 240 A140 140 0 0 1 300 350" stroke="url(#ringR)" stroke-width="7"/>
-    <path d="M118 240 A140 140 0 0 0 210 368" stroke="#1660ff" stroke-width="10" opacity="0.7" filter="url(#glow8)"/>
-  </g>
-
-  <g>
-    <rect x="164" y="272" width="17" height="46" rx="4" fill="#2e8bff" opacity="0.95"/>
-    <rect x="187" y="244" width="17" height="74" rx="4" fill="#3f9dff"/>
-    <rect x="210" y="216" width="17" height="102" rx="4" fill="#63b4ff"/>
-    <rect x="233" y="256" width="17" height="62" rx="4" fill="#8ec9ff" opacity="0.9"/>
-    <rect x="258" y="238" width="17" height="80" rx="4" fill="#f7c948"/>
-    <rect x="281" y="212" width="17" height="106" rx="4" fill="#f5b91e"/>
-    <rect x="304" y="186" width="17" height="132" rx="4" fill="#ffa726"/>
-    <rect x="327" y="232" width="17" height="86" rx="4" fill="#ffcb66" opacity="0.9"/>
-    <g stroke="#ffe9b8" stroke-width="5" fill="none" filter="url(#glow4)">
-      <path d="M162 262l46-34 34 16 62-58 32-22"/>
-    </g>
-    <g stroke="#fff6e3" stroke-width="3.5" fill="none">
-      <path d="M162 262l46-34 34 16 62-58 32-22"/>
-    </g>
-    <path d="M338 156l14-9-3 17z" fill="#fff6e3"/>
-    <circle cx="208" cy="228" r="5" fill="#ffffff"/>
-    <circle cx="242" cy="244" r="5" fill="#ffffff"/>
-    <circle cx="304" cy="186" r="5" fill="#ffffff"/>
-  </g>
-
-  <g>
-    <ellipse cx="256" cy="448" rx="244" ry="46" fill="#0b1633" opacity="0.9"/>
-    <ellipse cx="256" cy="448" rx="238" ry="42" fill="none" stroke="#2e8bff" stroke-width="3" opacity="0.8" filter="url(#glow4)"/>
-    <ellipse cx="256" cy="450" rx="196" ry="32" fill="none" stroke="#f5b91e" stroke-width="2.5" opacity="0.7" filter="url(#glow4)"/>
-    <ellipse cx="256" cy="452" rx="150" ry="22" fill="none" stroke="#b44bff" stroke-width="2" opacity="0.6"/>
-  </g>
-
-  <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-weight="750" text-anchor="middle">
-    <ellipse cx="80" cy="470" rx="58" ry="12" fill="#2e8bff" opacity="0.5" filter="url(#glow14)"/>
-    <ellipse cx="256" cy="472" rx="60" ry="12" fill="#8a6bff" opacity="0.4" filter="url(#glow14)"/>
-    <ellipse cx="440" cy="470" rx="58" ry="12" fill="#ff5940" opacity="0.5" filter="url(#glow14)"/>
-
-    <circle cx="52" cy="414" r="49" fill="url(#white)"/>
-    <text x="52" y="433" font-size="50" fill="#101c38">9</text>
-    <circle cx="133" cy="420" r="49" fill="url(#white)"/>
-    <text x="133" y="437" font-size="44" fill="#101c38">13</text>
-    <circle cx="214" cy="424" r="49" fill="url(#white)"/>
-    <text x="214" y="441" font-size="44" fill="#101c38">28</text>
-    <circle cx="295" cy="424" r="49" fill="url(#white)"/>
-    <text x="295" y="441" font-size="44" fill="#101c38">45</text>
-    <circle cx="376" cy="420" r="49" fill="url(#white)"/>
-    <text x="376" y="437" font-size="44" fill="#101c38">51</text>
-    <circle cx="456" cy="414" r="48" fill="url(#redb)"/>
-    <circle cx="456" cy="414" r="48" fill="none" stroke="#ff8a75" stroke-width="3" opacity="0.8" filter="url(#glow4)"/>
-    <text x="456" y="431" font-size="44" fill="#ffffff">18</text>
-
-    <ellipse cx="34" cy="396" rx="15" ry="9" fill="#ffffff" opacity="0.5" transform="rotate(-26 34 396)"/>
-    <ellipse cx="115" cy="402" rx="15" ry="9" fill="#ffffff" opacity="0.5" transform="rotate(-26 115 402)"/>
-    <ellipse cx="196" cy="406" rx="15" ry="9" fill="#ffffff" opacity="0.5" transform="rotate(-26 196 406)"/>
-    <ellipse cx="277" cy="406" rx="15" ry="9" fill="#ffffff" opacity="0.5" transform="rotate(-26 277 406)"/>
-    <ellipse cx="358" cy="402" rx="15" ry="9" fill="#ffffff" opacity="0.5" transform="rotate(-26 358 402)"/>
-    <ellipse cx="438" cy="396" rx="14" ry="8" fill="#ffffff" opacity="0.45" transform="rotate(-26 438 396)"/>
+  <!-- ball row -->
+  <g filter="url(#softSh)" font-family="Arial, Helvetica, sans-serif" font-weight="700" text-anchor="middle">
+    <circle cx="62" cy="428" r="39" fill="url(#ballW)"/>
+    <text x="62" y="441" font-size="34" fill="#16203a">9</text>
+    <circle cx="140" cy="428" r="39" fill="url(#ballW)"/>
+    <text x="140" y="441" font-size="34" fill="#16203a">13</text>
+    <circle cx="218" cy="428" r="39" fill="url(#ballW)"/>
+    <text x="218" y="441" font-size="34" fill="#16203a">28</text>
+    <circle cx="296" cy="428" r="39" fill="url(#ballW)"/>
+    <text x="296" y="441" font-size="34" fill="#16203a">45</text>
+    <circle cx="374" cy="428" r="39" fill="url(#ballW)"/>
+    <text x="374" y="441" font-size="34" fill="#16203a">51</text>
+    <circle cx="452" cy="428" r="39" fill="url(#ballR)"/>
+    <text x="452" y="441" font-size="34" fill="#ffffff">18</text>
   </g>
 </svg>
