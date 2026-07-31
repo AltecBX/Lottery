@@ -80,6 +80,11 @@ export function PortfolioPanel({ res, onSaveTicket }: {
   const { stats, quickPick, concentrated } = portfolio
   const spent = count * 2
   const bestAny = Math.max(stats.pAnyPrize, quickPick.pAnyPrize, concentrated.pAnyPrize)
+  const rows = [
+    { label: 'This set', stats, note: "model's numbers, spread across tickets" },
+    { label: 'The same pick, repeated', stats: concentrated, note: 'every ticket identical to the top pick' },
+    { label: 'Quick picks', stats: quickPick, note: 'drawn at random, like the counter gives you' },
+  ]
 
   const jOdds = useMemo(
     () => jackpotOdds(res.K, res.drawSize, res.special?.K ?? 0),
@@ -141,7 +146,8 @@ export function PortfolioPanel({ res, onSaveTicket }: {
         ))}
       </div>
 
-      <div className="tbl-wrap">
+      {/* five columns will not fit a phone, so the same figures stack as cards */}
+      <div className="tbl-wrap hide-sm">
         <table className="tbl">
           <thead>
             <tr>
@@ -153,11 +159,25 @@ export function PortfolioPanel({ res, onSaveTicket }: {
             </tr>
           </thead>
           <tbody>
-            <CompareRow label="This set" stats={stats} best={stats.pAnyPrize >= bestAny} note="model's numbers, spread across tickets" />
-            <CompareRow label="The same pick, repeated" stats={concentrated} best={concentrated.pAnyPrize >= bestAny} note="every ticket identical to the top pick" />
-            <CompareRow label="Quick picks" stats={quickPick} best={quickPick.pAnyPrize >= bestAny} note="drawn at random, like the counter gives you" />
+            {rows.map((r) => (
+              <CompareRow key={r.label} label={r.label} stats={r.stats} best={r.stats.pAnyPrize >= bestAny} note={r.note} />
+            ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="cmp-cards show-sm">
+        {rows.map((r) => (
+          <div className={`cmp-card${r.stats.pAnyPrize >= bestAny ? ' best' : ''}`} key={r.label}>
+            <div className="cmp-title">{r.label}<span className="sub">{r.note}</span></div>
+            <dl className="cmp-figs">
+              <div><dt>Numbers covered</dt><dd>{r.stats.distinctNumbers}</dd></div>
+              <div><dt>Any prize</dt><dd>{fmtPct(r.stats.pAnyPrize, r.stats.pAnyPrize < 0.1 ? 1 : 0)}</dd></div>
+              <div><dt>Some ticket hits 3+</dt><dd>{oneIn(r.stats.pAtLeast3)}</dd></div>
+              <div><dt>Best ticket, average</dt><dd>{r.stats.avgBestMatch.toFixed(2)}</dd></div>
+            </dl>
+          </div>
+        ))}
       </div>
 
       <p className="hint" style={{ display: 'block' }}>
