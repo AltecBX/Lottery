@@ -148,7 +148,9 @@ input, select, textarea { font: inherit; color: var(--ink); }
 ::selection { background: rgba(226, 171, 57, 0.35); }
 :focus-visible { outline: 2px solid var(--accent-bright); outline-offset: 2px; border-radius: 6px; }
 
-.app { min-height: 100vh; display: flex; flex-direction: column; }
+.app { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+/* On a desktop the window scrolls; the wrapper is inert. */
+.scroll-area { display: contents; }
 .container { width: 100%; max-width: 1340px; margin: 0 auto; padding: 0 22px; }
 
 /* Motion */
@@ -683,6 +685,9 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   border-top: 1px solid var(--border-strong);
   box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.25);
   padding: 7px 10px calc(7px + env(safe-area-inset-bottom));
+  /* own compositor layer: iOS drifts blurred fixed elements without one */
+  transform: translateZ(0);
+  will-change: transform;
 }
 .mobile-bar button {
   display: grid; place-items: center; gap: 3px;
@@ -756,25 +761,34 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   }
   .saved-ticket:active, .pf-ticket:active, .rank-card:active { transform: scale(0.995); }
 
-  .mobile-bar { display: grid; }
-  .main { padding: 14px 0 100px; }
-  .footer { padding-bottom: calc(92px + env(safe-area-inset-bottom)); }
+  /*
+   * App-shell layout, the way a native iOS app is built: the window itself
+   * never scrolls, one interior region does, and the tab bar lives outside it
+   * in normal flow. A `position: fixed` bar rides Safari's URL bar up and down
+   * as it collapses — this one has nothing to ride.
+   */
+  .app { height: 100vh; height: 100dvh; overflow: hidden; }
+  .scroll-area {
+    display: block; flex: 1 1 auto; min-height: 0;
+    overflow-y: auto; overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+  }
+  .mobile-bar { display: grid; position: static; z-index: 1; }
+  .main { padding: 14px 0 18px; }
+  .footer { padding-bottom: 20px; }
   .computing { bottom: calc(78px + env(safe-area-inset-bottom)); right: 12px; max-width: calc(100vw - 24px); }
 
   .grid { gap: 13px; }
   .card { padding: 16px 15px 18px; border-radius: 16px; }
   /*
-   * Nineteen panels, ten thousand pixels. Offscreen cards are skipped entirely
-   * until they approach the viewport; the intrinsic size keeps the scrollbar
-   * honest so the page does not jump as they resolve. Folded cards are already
-   * tiny, so they opt out and stay measured exactly.
+   * No content-visibility here, deliberately. Skipping offscreen panels sounds
+   * free, but their estimated heights make the document resize while a fling is
+   * in flight: scrolls landed short (a 3,000px scroll stopped at 2,073) and iOS
+   * shook the fixed bottom bar loose mid-page. Frame timing was already a clean
+   * 16.7ms median with zero dropped frames without it, so there was nothing to
+   * buy — the panels stay live and the document height stays honest.
    */
-  .card:not(.folded) {
-    content-visibility: auto;
-    contain-intrinsic-size: auto 640px;
-  }
-  /* an anchored card must render immediately, not on approach */
-  .card:target, .card:has(:focus-visible) { content-visibility: visible; }
   .card-head h2 { font-size: 16px; }
   .card-sub { font-size: 12.5px; }
   @media (pointer: coarse) { .card:hover { transform: none; } }
@@ -1087,3 +1101,21 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   .ledger-totals { gap: 12px; }
   .ledger-totals .meta { margin-left: 0; width: 100%; }
 }
+
+/* ---------- Pull to refresh ---------- */
+.ptr {
+  display: grid; place-items: center; overflow: hidden;
+  color: var(--muted); transition: color 0.15s ease;
+}
+.ptr-mark {
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%;
+  background: var(--surface-2); border: 1px solid var(--border);
+  font-size: 16px; line-height: 1;
+  transition: transform 0.18s cubic-bezier(0.3, 1.1, 0.6, 1), background 0.15s ease, color 0.15s ease;
+}
+.ptr.armed { color: var(--gold); }
+.ptr.armed .ptr-mark {
+  transform: rotate(180deg); color: var(--gold);
+  border-color: color-mix(in srgb, var(--gold) 50%, transparent); background: var(--gold-wash);
+}
+.ptr.spinning .ptr-mark { background: transparent; border-color: transparent; }

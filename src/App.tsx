@@ -14,6 +14,7 @@ import { fetchJackpotFeed, type JackpotFeed } from './engine/feed.ts'
 import { useEngine } from './hooks/useEngine.ts'
 import { useLocalStorage, useTheme } from './hooks/useLocalStorage.ts'
 import { useServiceWorker } from './hooks/useServiceWorker.ts'
+import { usePullToRefresh } from './hooks/usePullToRefresh.ts'
 import { PredictionPanel } from './components/PredictionPanel.tsx'
 import { RankingTable } from './components/RankingTable.tsx'
 import { HotColdOverdue } from './components/HotColdOverdue.tsx'
@@ -89,6 +90,20 @@ export default function App() {
   const [flash, setFlash] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [activeSection, setActiveSection] = useState('')
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * Which element actually scrolls. On a phone the app is a fixed-height shell
+   * with one interior scroller, so the bottom bar sits in normal flow beneath
+   * it and cannot be moved by Safari's disappearing URL bar. On a desktop the
+   * window scrolls as usual and this returns null.
+   */
+  const getScroller = useCallback((): HTMLElement | null => {
+    const el = scrollAreaRef.current
+    if (!el) return null
+    const oy = window.getComputedStyle(el).overflowY
+    return oy === 'auto' || oy === 'scroll' ? el : null
+  }, [])
 
   const games = gamesState.games
   const activeGame: GameData | undefined = games.find((g) => g.id === gamesState.activeId) ?? games[0]
@@ -307,6 +322,13 @@ export default function App() {
     })
   }, [setGamesState])
 
+  /** Drag down from the top to sync — the gesture every iOS app answers to. */
+  const pull = usePullToRefresh(
+    scrollAreaRef,
+    async () => { if (activeGame?.syncKey) await syncGame(activeGame.id) },
+    !!activeGame?.syncKey && hasData,
+  )
+
   // The advertised jackpots, published next to the app by a scheduled job.
   // Same-origin, so it works on a phone; failure is silent because every panel
   // falls back to projecting the prize from the history it already has.
@@ -364,6 +386,7 @@ export default function App() {
   const jumpTo = useCallback((id: string) => {
     const el = document.getElementById(id)
     if (!el) return
+    const scroller = getScroller()
     const navBottom = document.querySelector('.nav')?.getBoundingClientRect().bottom ?? 0
     const want = navBottom + 10
     let passes = 0
@@ -378,7 +401,9 @@ export default function App() {
       if (cancelled) return
       const delta = el.getBoundingClientRect().top - want
       if (Math.abs(delta) > 2) {
-        window.scrollBy({ top: delta, behavior: 'instant' as ScrollBehavior })
+        const opts = { top: delta, behavior: 'instant' as ScrollBehavior }
+        if (scroller) scroller.scrollBy(opts)
+        else window.scrollBy(opts)
         stable = 0
       } else {
         // One good frame proves nothing: panels resolve their real height a
@@ -393,7 +418,7 @@ export default function App() {
     }
     align()
     setActiveSection(id)
-  }, [])
+  }, [getScroller])
 
   // Scrollspy: highlight the section currently in view in the section nav
   useEffect(() => {
@@ -404,17 +429,28 @@ export default function App() {
           if (e.isIntersecting) { setActiveSection(e.target.id); break }
         }
       },
-      { rootMargin: '-18% 0px -72% 0px' },
+      { root: getScroller(), rootMargin: '-18% 0px -72% 0px' },
     )
     for (const [id] of NAV) {
       const el = document.getElementById(id)
       if (el) obs.observe(el)
     }
     return () => obs.disconnect()
-  }, [hasData, result])
+  }, [hasData, result, getScroller])
 
   return (
     <div className="app">
+      {/* One scroller under the bar, so the bar is in normal flow and can never drift */}
+      <div className="scroll-area" ref={scrollAreaRef}>
+      {(pull.distance > 0 || pull.refreshing) && (
+        <div
+          className={`ptr${pull.armed ? ' armed' : ''}${pull.refreshing ? ' spinning' : ''}`}
+          style={{ height: pull.refreshing ? 46 : pull.distance }}
+          aria-hidden="true"
+        >
+          <span className="ptr-mark">{pull.refreshing ? <span className="spinner" /> : '⟳'}</span>
+        </div>
+      )}
       <header className="header">
         <div className="container">
           <div className="header-row">
@@ -601,6 +637,7 @@ export default function App() {
           </p>
         </div>
       </footer>
+      </div>
 
       {(computing || syncing) && hasData && (
         <div className="computing"><span className="spinner" /> {syncing ? 'Syncing official results…' : 'Recalculating…'}</div>
