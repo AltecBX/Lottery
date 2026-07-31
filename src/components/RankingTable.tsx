@@ -6,9 +6,20 @@ import { SectionCard, Ball, EdgeChip, fmtPct } from './shared.tsx'
 export function RankingTable({ res }: { res: EngineResult }) {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [showAll, setShowAll] = useState(false)
-  const rows = showAll ? res.predictions.slice(0, 20) : res.top10
+  const [sortKey, setSortKey] = useState<'rank' | 'number'>('rank')
+  const [asc, setAsc] = useState(true)
+  const base = showAll ? res.predictions.slice(0, 20) : res.top10
+  const rows = [...base].sort((a, b) => {
+    const v = sortKey === 'number' ? a.number - b.number : a.rank - b.rank
+    return asc ? v : -v
+  })
   const maxScore = Math.max(0.001, ...res.predictions.map((p) => p.score))
   const minScore = Math.min(0, ...res.predictions.slice(0, 20).map((p) => p.score))
+  const setSort = (key: 'rank' | 'number') => {
+    if (sortKey === key) setAsc((v) => !v)
+    else { setSortKey(key); setAsc(true) }
+  }
+  const arrow = (key: 'rank' | 'number') => (sortKey === key ? (asc ? ' ▲' : ' ▼') : '')
 
   return (
     <SectionCard
@@ -26,10 +37,10 @@ export function RankingTable({ res }: { res: EngineResult }) {
         <table className="tbl">
           <thead>
             <tr>
-              <th style={{ width: 42 }}>Rank</th>
-              <th style={{ width: 60 }}>Number</th>
-              <th>Score</th>
-              <th className="num">Est. probability</th>
+              <th style={{ width: 46 }} className="sortable" onClick={() => setSort('rank')} title="Sort by model rank">Rank{arrow('rank')}</th>
+              <th style={{ width: 72 }} className="sortable" onClick={() => setSort('number')} title="Sort by ball number">Number{arrow('number')}</th>
+              <th className="sortable" onClick={() => setSort('rank')} title="Score order = rank order">Score</th>
+              <th className="num sortable" onClick={() => setSort('rank')} title="Probability order = rank order">Est. probability</th>
               <th>Edge</th>
               <th className="hide-sm">Main reason</th>
             </tr>

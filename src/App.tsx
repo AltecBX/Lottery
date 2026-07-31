@@ -23,6 +23,7 @@ import { BacktestPanel } from './components/BacktestPanel.tsx'
 import { HistoryTable } from './components/HistoryTable.tsx'
 import { PredictionLog } from './components/PredictionLog.tsx'
 import { RealityPanel } from './components/RealityPanel.tsx'
+import { RepeatsPanel } from './components/RepeatsPanel.tsx'
 import { InspectorPanel } from './components/InspectorPanel.tsx'
 import { TicketLab } from './components/TicketLab.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
@@ -33,6 +34,7 @@ const NAV = [
   ['prediction', 'Prediction'],
   ['ranking', 'Ranking'],
   ['log', 'Prediction log'],
+  ['repeats', 'Repeats'],
   ['reality', 'Reality check'],
   ['ticket', 'Ticket lab'],
   ['inspector', 'Inspector'],
@@ -437,6 +439,7 @@ export default function App() {
               <RealityPanel res={result} />
               <RankingTable res={result} />
               <PredictionLog res={result} />
+              <RepeatsPanel res={result} />
               <TicketLab
                 key={`t-${activeGame?.id}-${result.lastDate}-${result.drawCount}`}
                 res={result}

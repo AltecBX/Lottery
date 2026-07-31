@@ -8,10 +8,11 @@ const PAGE = 12
 
 export function HistoryTable({ draws, exportName, onDelete }: { draws: Draw[]; exportName: string; onDelete: (draw: Draw) => void }) {
   const [page, setPage] = useState(0)
-  const newestFirst = [...draws].reverse()
-  const pages = Math.max(1, Math.ceil(newestFirst.length / PAGE))
+  const [newestFirst, setNewestFirst] = useState(true)
+  const ordered = newestFirst ? [...draws].reverse() : draws
+  const pages = Math.max(1, Math.ceil(ordered.length / PAGE))
   const cur = Math.min(page, pages - 1)
-  const rows = newestFirst.slice(cur * PAGE, cur * PAGE + PAGE)
+  const rows = ordered.slice(cur * PAGE, cur * PAGE + PAGE)
 
   const exportCsv = () => {
     const blob = new Blob([drawsToCsv(draws)], { type: 'text/csv' })
@@ -34,7 +35,9 @@ export function HistoryTable({ draws, exportName, onDelete }: { draws: Draw[]; e
         <table className="tbl">
           <thead>
             <tr>
-              <th>Date</th>
+              <th className="sortable" onClick={() => { setNewestFirst((v) => !v); setPage(0) }} title="Toggle newest/oldest first">
+                Date{newestFirst ? ' ▼' : ' ▲'}
+              </th>
               <th>Day</th>
               <th>Numbers</th>
               <th style={{ width: 40 }} />
@@ -70,9 +73,9 @@ export function HistoryTable({ draws, exportName, onDelete }: { draws: Draw[]; e
       </div>
       {pages > 1 && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 12 }}>
-          <button className="btn sm" disabled={cur === 0} onClick={() => setPage(cur - 1)}>← Newer</button>
+          <button className="btn sm" disabled={cur === 0} onClick={() => setPage(cur - 1)}>← {newestFirst ? 'Newer' : 'Older'}</button>
           <span className="hint">page {cur + 1} of {pages}</span>
-          <button className="btn sm" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>Older →</button>
+          <button className="btn sm" disabled={cur >= pages - 1} onClick={() => setPage(cur + 1)}>{newestFirst ? 'Older' : 'Newer'} →</button>
         </div>
       )}
     </SectionCard>

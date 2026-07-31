@@ -281,6 +281,10 @@ export interface EngineResult {
   special: SpecialResult | null
   /** Set when the number pool appears to have changed over the history (rule change) */
   eraNotice: { earlyMax: number; currentMax: number; cutoffDate: string; affected: number } | null
+  /** Full-history repeat scan (exact + near repeats of winning combinations) */
+  repeats: import('./repeats.ts').RepeatAnalysis | null
+  /** True when the model's best combination has never been drawn in this history */
+  bestComboIsNew: boolean | null
 
   hot: HotColdEntry[]
   cold: HotColdEntry[]
