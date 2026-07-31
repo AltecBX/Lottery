@@ -4,7 +4,69 @@ import type { SavedTicket } from '../engine/games.ts'
 import { formatDate } from '../engine/dates.ts'
 import { formatOdds, jackpotOdds } from '../engine/odds.ts'
 import { positionalFit, type PositionalFit } from '../engine/positions.ts'
+import { buildLedger, type Ledger } from '../engine/ticket.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
+
+const dollars = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+
+/**
+ * The running account for every ticket saved: which draw it was for, what it
+ * actually won under the game's published prize table, and where that leaves
+ * you. Tickets saved before dates were tracked have no draw attached, so they
+ * are graded against the newest result and left out of the money totals.
+ */
+function TicketLedger({ ledger, drawSize, onRemoveTicket }: {
+  ledger: Ledger
+  drawSize: number
+  onRemoveTicket: (index: number) => void
+}) {
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div className="mini-title">My tickets</div>
+      {ledger.settled + ledger.pending > 0 && (
+        <div className="ledger-totals">
+          <span><b>{dollars(ledger.spent)}</b> spent</span>
+          <span><b>{dollars(ledger.won)}</b> won</span>
+          <span className={ledger.net >= 0 ? 'good' : 'bad'}><b>{dollars(ledger.net)}</b> net</span>
+          <span className="meta">
+            {ledger.settled} settled{ledger.pending > 0 ? ` · ${ledger.pending} waiting on a draw` : ''}
+          </span>
+        </div>
+      )}
+      <div style={{ display: 'grid', gap: 8 }}>
+        {ledger.rows.map((row) => {
+          const drawn = row.draw ? new Set(row.draw.sorted) : new Set<number>()
+          const g = row.grade
+          return (
+            <div className={`saved-ticket${g?.prize ? ' won' : ''}`} key={`${row.ticket.numbers.join('-')}|${row.ticket.special ?? ''}|${row.ticket.forDate ?? ''}|${row.index}`}>
+              {row.ticket.numbers.map((n) => (
+                <Ball key={n} n={n} size="sm" variant={row.status !== 'pending' && drawn.has(n) ? 'match' : ''} />
+              ))}
+              {row.ticket.special !== undefined && (
+                <Ball n={row.ticket.special} size="sm" variant={g?.specialHit ? 'special' : 'faded'} title="bonus ball" />
+              )}
+              <span className="meta">
+                {row.status === 'pending' ? (
+                  <>for {formatDate(row.ticket.forDate!)} — not drawn yet</>
+                ) : row.status === 'open' ? (
+                  <>vs {row.draw ? formatDate(row.draw.date) : 'no draw'} · {g?.mains ?? 0}/{drawSize}{g?.specialHit ? ' + bonus' : ''}</>
+                ) : (
+                  <>{formatDate(row.draw!.date)} · {g!.label}</>
+                )}
+              </span>
+              {g && g.prize > 0 && <span className="ledger-prize">{dollars(g.prize)}</span>}
+              <button className="btn ghost sm danger" title="Remove ticket" onClick={() => onRemoveTicket(row.index)}>✕</button>
+            </div>
+          )
+        })}
+      </div>
+      <p className="hint" style={{ display: 'block', marginTop: 8 }}>
+        Tickets settle themselves the moment their draw syncs in, priced with the game's published prize table
+        (5 of {drawSize} pays $1,000,000, 4 + bonus $50,000, and so on down to $4).
+      </p>
+    </div>
+  )
+}
 
 interface Evaluation {
   numbers: number[]
@@ -39,7 +101,7 @@ export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTick
   const [evalResult, setEvalResult] = useState<Evaluation | null>(null)
 
   const rankOf = useMemo(() => new Map(res.predictions.map((p) => [p.number, p])), [res.predictions])
-  const latest = draws.length > 0 ? draws[draws.length - 1] : null
+  const ledger = useMemo(() => buildLedger(savedTickets, draws, D), [savedTickets, draws, D])
 
   const parseInputs = (): SavedTicket | null => {
     const parsed = nums.map((s) => Number(s.trim()))
@@ -263,37 +325,7 @@ export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTick
         </div>
       )}
 
-      {savedTickets.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <div className="mini-title">
-            My saved tickets — checked against the latest draw{latest ? ` (${formatDate(latest.date)})` : ''}
-          </div>
-          <div style={{ display: 'grid', gap: 8 }}>
-            {savedTickets.map((t, i) => {
-              const actual = latest ? new Set(latest.sorted) : new Set<number>()
-              const hits = t.numbers.filter((n) => actual.has(n)).length
-              const spHit = latest && t.special !== undefined && latest.special === t.special
-              return (
-                <div className="saved-ticket" key={`${t.numbers.join('-')}|${t.special ?? ''}`}>
-                  {t.numbers.map((n) => (
-                    <Ball key={n} n={n} size="sm" variant={actual.has(n) ? 'match' : ''} />
-                  ))}
-                  {t.special !== undefined && (
-                    <Ball n={t.special} size="sm" variant={spHit ? 'special' : 'faded'} title="bonus ball" />
-                  )}
-                  <span className="meta">
-                    {latest ? `${hits}/${D} hit${spHit ? ' + bonus!' : ''}` : 'no draws yet'}
-                  </span>
-                  <button className="btn ghost sm danger" title="Remove ticket" onClick={() => onRemoveTicket(i)}>✕</button>
-                </div>
-              )
-            })}
-          </div>
-          <p className="hint" style={{ display: 'block', marginTop: 8 }}>
-            Saved tickets re-check themselves automatically every time new results sync in.
-          </p>
-        </div>
-      )}
+      {savedTickets.length > 0 && <TicketLedger ledger={ledger} drawSize={D} onRemoveTicket={onRemoveTicket} />}
     </SectionCard>
   )
 }

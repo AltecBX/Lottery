@@ -5,6 +5,12 @@ import type { SyncKey } from './sync.ts'
 export interface SavedTicket {
   numbers: number[]
   special?: number
+  /** ISO date of the draw this ticket is played for; absent on tickets saved before dates were tracked. */
+  forDate?: string
+  /** What the ticket cost, in dollars. Defaults to the game's ticket price. */
+  cost?: number
+  /** ISO timestamp the ticket was saved, for ordering the ledger. */
+  savedAt?: string
 }
 
 /** One tracked game: its own history, settings, and (optionally) an official sync source. */
