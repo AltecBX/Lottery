@@ -1,5 +1,5 @@
 import type { Draw, SignalMeta } from './types.ts'
-import { DOW_WINDOW, HistoryState, maskOverlap } from './state.ts'
+import { DOW_WINDOW, HAZARD_GMAX, HistoryState, maskOverlap } from './state.ts'
 
 export interface SignalContext {
   /** Day of week of the draw being predicted */
@@ -27,13 +27,18 @@ export const SIGNAL_META: SignalMeta[] = [
   { key: 'hot', label: 'Hot streak (z-score)', short: 'Hot', description: 'How far the last-20 count sits above/below its long-run expectation, in standard deviations.' },
   { key: 'momentum', label: 'Momentum', short: 'Momentum', description: 'Short-window rate minus long-window rate — rising numbers score high, fading ones low.' },
   { key: 'overdue', label: 'Overdue ratio', short: 'Overdue', description: 'Draws since last seen relative to the number\'s own average gap.' },
+  { key: 'hazard', label: 'Gap hazard rate', short: 'Hazard', description: 'The measured probability of appearing at the current gap length, pooled across all numbers — the statistically honest version of "overdue".' },
   { key: 'cycle', label: 'Gap cycle fit', short: 'Cycle', description: 'Scores numbers whose current gap matches their historical gap rhythm (regular cycles).' },
   { key: 'repeat', label: 'Repeat from last draw', short: 'Repeat', description: 'Empirical probability of appearing given the number was (or was not) in the previous draw.' },
   { key: 'follower', label: 'Follows previous numbers', short: 'Followers', description: 'How often this number historically appeared right after the numbers in the previous draw.' },
   { key: 'followerDow', label: 'Day + previous draw', short: 'Day+prev', description: 'Follower relationship measured only on the target day of week.' },
   { key: 'position', label: 'Position fit', short: 'Position', description: 'Fit against the per-position value distributions of the source feed.' },
   { key: 'similarity', label: 'Similar situations', short: 'Similarity', description: 'What came next in the most similar historical situations (previous draw, weekday, draw shape).' },
+  { key: 'mlModel', label: 'Learned combiner (regression)', short: 'ML combiner', description: 'An online multinomial-regression model trained draw-by-draw on every signal at once — it learns how the signals interact instead of treating them independently.' },
 ]
+
+/** The mlModel signal is produced by the backtest's online learner, not by computeRawSignals. */
+export const ML_KEY = 'mlModel'
 
 export const SIGNAL_LABEL: Record<string, SignalMeta> = Object.fromEntries(SIGNAL_META.map((s) => [s.key, s]))
 
@@ -223,6 +228,17 @@ export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePo
       raw[i] = Math.min(3, state.drawsSince(i) / Math.max(1, state.meanGap(i)))
     }
     push('overdue', raw)
+  }
+  // hazard: pooled P(hit | current gap), shrunk toward the fair-game rate D/K
+  {
+    const raw = new Float64Array(S)
+    const a = 40
+    const p0 = D / K
+    for (let i = 1; i <= K; i++) {
+      const g = Math.min(HAZARD_GMAX, state.drawsSince(i))
+      raw[i] = (state.hazardHits[g] + a * p0) / (state.hazardExp[g] + a)
+    }
+    push('hazard', raw)
   }
   // cycle: gap-rhythm fit — high when current gap sits near the number's own mean gap
   {

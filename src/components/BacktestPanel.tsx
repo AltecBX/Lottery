@@ -21,7 +21,7 @@ export function BacktestPanel({ res }: { res: EngineResult }) {
       id="backtest"
       title="Backtest results"
       hint={`walk-forward · ${bt.evaluated} draws evaluated · first ${bt.minHistory} used as warm-up`}
-      sub="Every historical draw was predicted using only the draws before it — then compared to what actually happened (see the Prediction log for the draw-by-draw record). This is also how the ensemble learns: signal weights are re-fit after every draw, per weekday, and signals that don't beat chance get their weight cut to zero."
+      sub="Every historical draw was predicted using only the draws before it — then compared to what actually happened (see the Prediction log for the draw-by-draw record). This is also how the ensemble learns: signal weights are re-fit after every draw, a regression model re-trains on every result, and signals that don't beat chance get their weight cut to zero."
     >
       <div className="tiles" style={{ marginBottom: 18 }}>
         <Tile
@@ -92,6 +92,15 @@ export function BacktestPanel({ res }: { res: EngineResult }) {
           </div>
           <p className="hint" style={{ display: 'block', marginTop: 8 }}>
             Skill = average hits in that signal's own top-10, minus chance. Weights are re-learned online as history grows.
+            {bt.mlSkillNats !== undefined && bt.evaluated >= 50 && (
+              <>
+                {' '}The learned combiner's probability quality vs pure chance:{' '}
+                <strong style={{ color: bt.mlSkillNats > 0.005 ? 'var(--good-text)' : 'var(--muted)' }}>
+                  {bt.mlSkillNats >= 0 ? '+' : ''}{bt.mlSkillNats.toFixed(3)} log-score/draw
+                </strong>
+                {bt.mlSkillNats > 0.005 ? ' — its probabilities beat uniform on unseen draws.' : ' — no measurable probability edge on this data (expected for a fair game).'}
+              </>
+            )}
           </p>
         </div>
         <div>

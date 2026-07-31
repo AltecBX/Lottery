@@ -4,6 +4,13 @@ import { computeRawSignals, computeSpecialRawSignals, SIGNAL_LABEL, signalKeys, 
 
 export const MIN_HISTORY = 30
 
+/**
+ * Online-regression combiner hyperparameters, chosen by sweeping structured
+ * sample data (maximize learned skill) against random seeds (log-score must
+ * stay near zero — an honest model must not become over-confident on noise).
+ */
+export const ML_TUNING = { eta: 0.02, l2: 1e-3 }
+
 export interface BacktestOutput {
   summary: BacktestSummary
   /** Learned ensemble weights (used for the live prediction) */
@@ -14,6 +21,8 @@ export interface BacktestOutput {
   specialWeights: Record<string, number> | null
   /** Bonus-ball calibrated P(hit) by predicted rank */
   specialRankHitRate: number[] | null
+  /** Trained coefficients of the online regression combiner (base-signal order) */
+  mlWeights: number[]
 }
 
 /**
@@ -85,6 +94,19 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
   const chance10 = (D * Math.min(10, K)) / K
   const keysAll = signalKeys(usePosition)
 
+  // Online multinomial-regression combiner: one shared coefficient per base
+  // signal, trained walk-forward by AdaGrad on the draw's log-likelihood
+  // (softmax over the pool, the actual numbers as positives). Its logit vector
+  // joins the ensemble as the 'mlModel' signal, subject to the same
+  // significance-gated weighting as every other signal.
+  const baseKeys = keysAll.filter((k) => k !== 'mlModel')
+  const F = baseKeys.length
+  const mlW = new Float64Array(F)
+  const mlG = new Float64Array(F)
+  const ML_ETA = ML_TUNING.eta
+  const ML_L2 = ML_TUNING.l2
+  let mlLLGain = 0 // Σ log(p_actual · K): log-likelihood above uniform, in nats
+
   // Global skill state: recent (EMA) and lifetime, per signal
   const emaG: Record<string, number> = {}
   const sumHits10: Record<string, number> = {}
@@ -140,6 +162,24 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
       const keys = rawSignals.map((s) => s.key)
       const zs = rawSignals.map((s) => zNormalize(s.raw, K))
       const actual = new Set(target.sorted.filter((x) => x <= K))
+
+      // Combiner prediction from coefficients trained on draws BEFORE t only
+      const logits = new Float64Array(K + 1)
+      for (let s = 0; s < F; s++) {
+        const w = mlW[s]
+        if (w === 0) continue
+        const z = zs[s]
+        for (let i = 1; i <= K; i++) logits[i] += w * z[i]
+      }
+      let maxL = 0
+      for (let i = 1; i <= K; i++) if (logits[i] > maxL) maxL = logits[i]
+      const probs = new Float64Array(K + 1)
+      let expSum = 0
+      for (let i = 1; i <= K; i++) { probs[i] = Math.exp(logits[i] - maxL); expSum += probs[i] }
+      for (let i = 1; i <= K; i++) probs[i] /= expSum
+      for (const i of actual) mlLLGain += Math.log(Math.max(1e-300, probs[i]) * K)
+      keys.push('mlModel')
+      zs.push(zNormalize(logits, K))
 
       // Per-signal evaluation (top-10 hit count)
       const sigHits: Record<string, number> = {}
@@ -240,6 +280,18 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
         sumHits10[k] = (sumHits10[k] ?? 0) + sigHits[k]
         evalCount[k] = (evalCount[k] ?? 0) + 1
       }
+
+      // Train the combiner on this draw (informs future predictions only):
+      // gradient of the negative log-likelihood, AdaGrad step, light L2
+      for (let s = 0; s < F; s++) {
+        const z = zs[s]
+        let ez = 0
+        for (let i = 1; i <= K; i++) ez += probs[i] * z[i]
+        let g = actual.size * ez
+        for (const i of actual) g -= z[i]
+        mlG[s] += g * g
+        mlW[s] -= (ML_ETA / Math.sqrt(mlG[s] + 1e-8)) * (g + ML_L2 * mlW[s])
+      }
     }
     state.push(target)
   }
@@ -299,6 +351,7 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
     baselinePick: evaluated ? baseSumPick / evaluated : 0,
     baseline10: evaluated ? baseSum10 / evaluated : 0,
     ens10AtLeast2: evaluated ? ens10AtLeast2 / evaluated : 0,
+    mlSkillNats: evaluated ? mlLLGain / evaluated : 0,
     points,
     byDow: dowAgg
       .map((d, dow) => ({
@@ -323,5 +376,5 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
       : {}),
   }
 
-  return { summary, weights: finalWeights, rankHitRate, specialWeights, specialRankHitRate }
+  return { summary, weights: finalWeights, rankHitRate, specialWeights, specialRankHitRate, mlWeights: Array.from(mlW) }
 }

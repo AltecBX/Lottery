@@ -159,6 +159,12 @@ export interface BacktestSummary {
   signals: SignalPerformance[]
   /** Empirical hit-rate by predicted rank (calibrated, monotone) */
   rankHitRate: number[]
+  /**
+   * Walk-forward log-likelihood of the learned combiner's probabilities minus
+   * pure chance, in nats per draw. Positive = its probabilities genuinely beat
+   * uniform on unseen draws; ~0 = no measurable probability skill.
+   */
+  mlSkillNats?: number
   /** Bonus-ball backtest (present when the game has one) */
   special?: {
     evaluated: number
