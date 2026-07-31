@@ -18,6 +18,7 @@ export function BacktestPanel({ res }: { res: EngineResult }) {
 
   return (
     <SectionCard
+      collapsible
       id="backtest"
       title="Backtest results"
       hint={`walk-forward · ${bt.evaluated} draws evaluated · first ${bt.minHistory} used as warm-up`}

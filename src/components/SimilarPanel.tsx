@@ -5,6 +5,7 @@ import { SectionCard, Ball, fmtPct } from './shared.tsx'
 export function SimilarPanel({ res }: { res: EngineResult }) {
   return (
     <SectionCard
+      collapsible
       id="similar"
       title="Similar historical situations"
       sub="Moments in history that most resemble right now (same weekday ahead, similar previous draw and draw shape) — and what actually came next. Outlined numbers are also in the current top-10 prediction."

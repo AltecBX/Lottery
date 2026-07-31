@@ -5,6 +5,7 @@ import { SectionCard, Ball, fmtPct } from './shared.tsx'
 export function DowPanel({ res }: { res: EngineResult }) {
   return (
     <SectionCard
+      collapsible
       id="dow"
       title="Day of week analysis"
       className="half"

@@ -4,6 +4,7 @@ import { SectionCard } from './shared.tsx'
 export function HotColdOverdue({ res }: { res: EngineResult }) {
   return (
     <SectionCard
+      collapsible
       id="hotcold"
       title="Hot, cold & overdue"
       className="half"

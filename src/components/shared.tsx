@@ -1,4 +1,18 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+
+/** True on phone-width screens — keeps layout decisions in one place. */
+export function useIsPhone(): boolean {
+  const [phone, setPhone] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 760px)')
+    const on = () => setPhone(mq.matches)
+    mq.addEventListener('change', on)
+    return () => mq.removeEventListener('change', on)
+  }, [])
+  return phone
+}
 
 export function Ball({ n, size = 'md', variant = '', title }: { n: number; size?: 'hero' | 'md' | 'sm'; variant?: string; title?: string }) {
   return (
@@ -8,7 +22,11 @@ export function Ball({ n, size = 'md', variant = '', title }: { n: number; size?
   )
 }
 
-export function SectionCard({ id, title, hint, sub, children, className = '', headExtra }: {
+/**
+ * A panel. On phones, secondary panels (`collapsible`) start folded so the
+ * screen leads with predictions — tapping the header expands them in place.
+ */
+export function SectionCard({ id, title, hint, sub, children, className = '', headExtra, collapsible = false }: {
   id?: string
   title: string
   hint?: string
@@ -16,16 +34,37 @@ export function SectionCard({ id, title, hint, sub, children, className = '', he
   children: ReactNode
   className?: string
   headExtra?: ReactNode
+  collapsible?: boolean
 }) {
+  const [open, setOpen] = useState(false)
+  const isPhone = useIsPhone()
+  const folded = collapsible && isPhone && !open
+
   return (
-    <section id={id} className={`card section-anchor ${className}`}>
-      <div className="card-head">
+    <section id={id} className={`card section-anchor ${className}${folded ? ' folded' : ''}`}>
+      <div
+        className={`card-head${collapsible && isPhone ? ' tappable' : ''}`}
+        onClick={collapsible && isPhone ? () => setOpen((v) => !v) : undefined}
+        role={collapsible && isPhone ? 'button' : undefined}
+        aria-expanded={collapsible && isPhone ? open : undefined}
+        tabIndex={collapsible && isPhone ? 0 : undefined}
+        onKeyDown={
+          collapsible && isPhone
+            ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((v) => !v) } }
+            : undefined
+        }
+      >
         <h2>{title}</h2>
-        {hint && <span className="hint">{hint}</span>}
-        {headExtra && <span className="spacer">{headExtra}</span>}
+        {hint && <span className="hint hide-sm">{hint}</span>}
+        {headExtra && !folded && <span className="spacer">{headExtra}</span>}
+        {collapsible && isPhone && <span className="fold-caret" aria-hidden="true">{open ? '−' : '+'}</span>}
       </div>
-      {sub && <p className="card-sub">{sub}</p>}
-      {children}
+      {!folded && (
+        <>
+          {sub && <p className="card-sub">{sub}</p>}
+          {children}
+        </>
+      )}
     </section>
   )
 }

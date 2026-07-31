@@ -5,6 +5,7 @@ export function CombosPanel({ res }: { res: EngineResult }) {
   const combos = res.bestCombo ? [res.bestCombo, ...res.altCombos] : []
   return (
     <SectionCard
+      collapsible
       id="combos"
       title="Combination builder"
       className="half"

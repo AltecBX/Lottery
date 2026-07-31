@@ -4,6 +4,8 @@ import { mergeDraws, parseDelimitedText, rowsToDraws } from '../engine/parse.ts'
 import { HistoryState } from '../engine/state.ts'
 import { isotonicDecreasing, runBacktest } from '../engine/backtest.ts'
 import { analyzeRepeats } from '../engine/repeats.ts'
+import { analyzePositions, orderStatPmf, positionalFit } from '../engine/positions.ts'
+import { topIndices, topIndicesPartial } from '../engine/signals.ts'
 import { runEngine } from '../engine/engine.ts'
 import { generateSampleDraws } from '../engine/sample.ts'
 import { choose, hitDistribution, jackpotOdds, matchOdds } from '../engine/odds.ts'
@@ -288,6 +290,25 @@ describe('learned combiner (online regression)', () => {
     expect(res.bestComboIsNew).toBe(true)
   })
 
+  it('topIndicesPartial matches topIndices exactly, including tie order', () => {
+    const K = 69
+    for (const seed of [1, 2, 3]) {
+      let a = seed >>> 0
+      const rand = () => {
+        a |= 0; a = (a + 0x6d2b79f5) | 0
+        let t = Math.imul(a ^ (a >>> 15), 1 | a)
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+      }
+      const arr = new Float64Array(K + 1)
+      // deliberately coarse values so ties are common
+      for (let i = 1; i <= K; i++) arr[i] = Math.round(rand() * 5) / 5
+      for (const m of [1, 3, 10, 25]) {
+        expect(topIndicesPartial(arr, K, m)).toEqual(topIndices(arr, K, m))
+      }
+    }
+  })
+
   it('hazard histogram accounts for every (number, draw) exposure', () => {
     const draws = fairRandomDraws(42, 120, 30, 4)
     const st = new HistoryState(30, 4)
@@ -347,6 +368,72 @@ describe('bonus-ball model', () => {
     for (let i = 0; i < a.backtest.points.length - 1; i++) {
       expect(a.backtest.points[i]).toEqual(b.backtest.points[i])
     }
+  })
+})
+
+describe('column (order-statistic) analysis', () => {
+  const draws = fairRandomDraws(5, 900, 69, 5)
+
+  it('order-statistic pmf is a proper distribution matching the known mean', () => {
+    const K = 69, D = 5
+    for (let r = 1; r <= D; r++) {
+      let mass = 0
+      let mean = 0
+      for (let v = 1; v <= K; v++) {
+        const p = orderStatPmf(K, D, r, v)
+        expect(p).toBeGreaterThanOrEqual(0)
+        mass += p
+        mean += v * p
+      }
+      expect(mass).toBeCloseTo(1, 9)
+      // E[r-th of D from 1..K] = r(K+1)/(D+1)
+      expect(mean).toBeCloseTo((r * (K + 1)) / (D + 1), 6)
+    }
+    // impossible placements carry zero mass
+    expect(orderStatPmf(69, 5, 1, 66)).toBe(0)
+    expect(orderStatPmf(69, 5, 5, 4)).toBe(0)
+  })
+
+  it('measures each column against its own history and tracks theory', () => {
+    const pa = analyzePositions(draws, 69, 5, true)
+    expect(pa.columns).toHaveLength(5)
+    pa.columns.forEach((c, i) => {
+      expect(c.draws).toBe(900)
+      // columns are strictly ordered: every value in column i < column i+1's max
+      expect(c.theoryMean).toBeCloseTo(((i + 1) * 70) / 6, 6)
+      // a fair game's observed column mean tracks the theoretical one
+      expect(Math.abs(c.mean - c.theoryMean)).toBeLessThan(3)
+      expect(c.min).toBeLessThanOrEqual(c.p10)
+      expect(c.p10).toBeLessThanOrEqual(c.median)
+      expect(c.median).toBeLessThanOrEqual(c.p90)
+      expect(c.p90).toBeLessThanOrEqual(c.max)
+    })
+    // the lowest ball never reaches the top of the pool, the highest never the bottom
+    expect(pa.columns[0].max).toBeLessThan(69)
+    expect(pa.columns[4].min).toBeGreaterThan(1)
+  })
+
+  it('positional fit flags shapes the history has never produced', () => {
+    const pa = analyzePositions(draws, 69, 5, true)
+    const typical = [pa.columns[0].median, pa.columns[1].median, pa.columns[2].median, pa.columns[3].median, pa.columns[4].median]
+    const ok = positionalFit(pa, typical)
+    expect(ok.impossibleColumns).toHaveLength(0)
+    expect(ok.plausibility).toBeGreaterThan(0.5)
+    // five clustered high numbers: the low columns are far outside anything drawn
+    const absurd = [65, 66, 67, 68, 69]
+    const bad = positionalFit(pa, absurd)
+    expect(bad.impossibleColumns.length).toBeGreaterThan(0)
+    expect(bad.plausibility).toBeLessThan(0.5)
+  })
+
+  it('engine exposes the column analysis and scores its own best combo', () => {
+    const res = runEngine(draws, DEFAULT_SETTINGS)
+    expect(res.ok).toBe(true)
+    expect(res.positionAnalysis?.columns).toHaveLength(5)
+    expect(res.positionAnalysis?.sorted).toBe(true)
+    expect(res.bestComboFit).not.toBeNull()
+    // the builder should not propose a shape this history has never produced
+    expect(res.bestComboFit!.impossibleColumns).toHaveLength(0)
   })
 })
 

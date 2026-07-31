@@ -1,27 +1,30 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <defs>
-    <radialGradient id="bg" cx="0.5" cy="0.32" r="0.95">
-      <stop offset="0" stop-color="#101d3c"/>
+    <radialGradient id="bg" cx="0.5" cy="0.34" r="0.95">
+      <stop offset="0" stop-color="#122343"/>
       <stop offset="0.55" stop-color="#0a1226"/>
-      <stop offset="1" stop-color="#050810"/>
+      <stop offset="1" stop-color="#04070f"/>
     </radialGradient>
-    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffe08a"/>
-      <stop offset="0.55" stop-color="#e8a91f"/>
-      <stop offset="1" stop-color="#b87709"/>
+    <linearGradient id="gold" x1="0.15" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#fff0b8"/>
+      <stop offset="0.28" stop-color="#f3c74e"/>
+      <stop offset="0.6" stop-color="#d99a1d"/>
+      <stop offset="1" stop-color="#a86f08"/>
     </linearGradient>
-    <linearGradient id="silver" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="silver" x1="0.2" y1="0" x2="0.8" y2="1">
       <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.6" stop-color="#c9d3e2"/>
-      <stop offset="1" stop-color="#8e9bb1"/>
+      <stop offset="0.35" stop-color="#e4ebf5"/>
+      <stop offset="0.62" stop-color="#a9b6ca"/>
+      <stop offset="1" stop-color="#7c8aa1"/>
     </linearGradient>
-    <linearGradient id="ringBlue" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2e7fe8"/>
-      <stop offset="1" stop-color="#55b0ff"/>
+    <linearGradient id="blue" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#1f6fd8"/>
+      <stop offset="0.5" stop-color="#3f9bff"/>
+      <stop offset="1" stop-color="#7cc4ff"/>
     </linearGradient>
-    <linearGradient id="ringGold" x1="0" y1="1" x2="1" y2="0">
-      <stop offset="0" stop-color="#d89522"/>
-      <stop offset="1" stop-color="#f2c155"/>
+    <linearGradient id="ringgold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f6cf62"/>
+      <stop offset="1" stop-color="#d1901c"/>
     </linearGradient>
     <radialGradient id="ballW" cx="0.33" cy="0.28" r="0.9">
       <stop offset="0" stop-color="#ffffff"/>
@@ -36,58 +39,62 @@
       <stop offset="1" stop-color="#8f1a10"/>
     </radialGradient>
     <filter id="glowB" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="9"/>
+      <feGaussianBlur stdDeviation="10"/>
     </filter>
     <filter id="softSh" x="-40%" y="-40%" width="180%" height="180%">
-      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#000000" flood-opacity="0.45"/>
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#000000" flood-opacity="0.5"/>
     </filter>
   </defs>
 
-  <rect width="512" height="512" rx="104" fill="url(#bg)"/>
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
 
-  <!-- faint starfield -->
+  <!-- starfield -->
   <g fill="#9db8e8">
     <circle cx="70" cy="90" r="2" opacity="0.5"/>
     <circle cx="440" cy="70" r="1.6" opacity="0.4"/>
-    <circle cx="470" cy="200" r="2" opacity="0.35"/>
-    <circle cx="50" cy="260" r="1.6" opacity="0.4"/>
-    <circle cx="420" cy="330" r="1.7" opacity="0.3"/>
-    <circle cx="120" cy="45" r="1.4" opacity="0.4"/>
-    <circle cx="330" cy="38" r="1.5" opacity="0.35"/>
-    <circle cx="88" cy="330" r="1.8" opacity="0.3"/>
+    <circle cx="466" cy="196" r="2" opacity="0.32"/>
+    <circle cx="52" cy="252" r="1.6" opacity="0.4"/>
+    <circle cx="120" cy="45" r="1.4" opacity="0.36"/>
+    <circle cx="336" cy="38" r="1.5" opacity="0.34"/>
+    <circle cx="86" cy="322" r="1.8" opacity="0.28"/>
+    <circle cx="424" cy="300" r="1.5" opacity="0.3"/>
   </g>
 
-  <!-- rising chart line behind the ring -->
-  <g opacity="0.5">
-    <path d="M120 300 L180 250 L230 272 L300 190 L372 214 L398 150" stroke="#2e7fe8" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
-    <path d="M398 150 l-4 22 M398 150 l-21 8" stroke="#55b0ff" stroke-width="7" stroke-linecap="round" opacity="0.55"/>
+  <!-- data line behind the ring -->
+  <g opacity="0.42">
+    <path d="M104 292 L164 244 L214 266 L292 178 L368 206 L404 142" stroke="#2e7fe8" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M404 142 l-5 23 M404 142 l-22 7" stroke="#7cc4ff" stroke-width="7" stroke-linecap="round"/>
   </g>
 
   <!-- analysis ring -->
-  <circle cx="256" cy="212" r="152" stroke="url(#ringBlue)" stroke-width="13" fill="none" opacity="0.55" filter="url(#glowB)"/>
-  <circle cx="256" cy="212" r="152" stroke="url(#ringBlue)" stroke-width="11" fill="none"/>
-  <path d="M 256 60 A 152 152 0 0 1 405.3 183.6" stroke="url(#ringGold)" stroke-width="13" fill="none" stroke-linecap="round"/>
-  <circle cx="141.6" cy="303.2" r="9" fill="#f2c155"/>
+  <circle cx="256" cy="206" r="152" stroke="url(#blue)" stroke-width="15" fill="none" opacity="0.45" filter="url(#glowB)"/>
+  <circle cx="256" cy="206" r="152" stroke="url(#blue)" stroke-width="10" fill="none" opacity="0.95"/>
+  <path d="M256 54 A 152 152 0 0 1 393.6 141.3" stroke="url(#ringgold)" stroke-width="15" stroke-linecap="round" fill="none"/>
+  <path d="M118.4 141.3 A 152 152 0 0 0 146.6 300" stroke="url(#blue)" stroke-width="15" stroke-linecap="round" fill="none" opacity="0.9"/>
+  <circle cx="393.6" cy="141.3" r="10" fill="#f6cf62"/>
+  <circle cx="146.6" cy="300" r="8" fill="#7cc4ff"/>
 
-  <!-- JP monogram (scaled from the 100-box mark) -->
-  <g transform="translate(256 208) scale(3.55) translate(-50 -49)" filter="url(#softSh)">
-    <path d="M38.5 26 H47 V59.5 C47 66.8 41.8 72 34.6 72 C28 72 22.9 67.6 22 60.9 L30 59.6 C30.5 62.9 32.3 64.6 34.8 64.6 C37.2 64.6 38.5 62.9 38.5 59.8 Z" fill="url(#gold)"/>
-    <path fill-rule="evenodd" d="M53 26 H66.5 C74.5 26 80 31.4 80 39 C80 46.6 74.5 52 66.5 52 H61.5 V72 H53 Z M61.5 33.4 V44.6 H66 C69.8 44.6 72 42.4 72 39 C72 35.6 69.8 33.4 66 33.4 Z" fill="url(#silver)"/>
+  <!-- JP monogram (from the 120-box mark) -->
+  <g transform="translate(256 206) scale(2.5) translate(-60 -60)" filter="url(#softSh)">
+    <g transform="translate(-13.5 0)">
+      <path fill-rule="evenodd" d="M74 30 H91.5 C103 30 110.5 37.6 110.5 48.8 C110.5 60 103 67.6 91.5 67.6 H85.8 V90 H74 Z M85.8 40.4 V57.2 H90.6 C95.9 57.2 99 54 99 48.8 C99 43.6 95.9 40.4 90.6 40.4 Z" fill="url(#silver)"/>
+      <path d="M63.5 30 H75.5 V72.5 C75.5 84.4 68 92 56.6 92 C46 92 38.4 85.6 37 74.6 L48.4 72.6 C49.2 78.2 52 81.2 56.4 81.2 C60.9 81.2 63.5 78 63.5 72.2 Z" fill="url(#gold)"/>
+    </g>
   </g>
 
   <!-- ball row -->
   <g filter="url(#softSh)" font-family="Arial, Helvetica, sans-serif" font-weight="700" text-anchor="middle">
-    <circle cx="62" cy="428" r="39" fill="url(#ballW)"/>
-    <text x="62" y="441" font-size="34" fill="#16203a">9</text>
-    <circle cx="140" cy="428" r="39" fill="url(#ballW)"/>
-    <text x="140" y="441" font-size="34" fill="#16203a">13</text>
-    <circle cx="218" cy="428" r="39" fill="url(#ballW)"/>
-    <text x="218" y="441" font-size="34" fill="#16203a">28</text>
-    <circle cx="296" cy="428" r="39" fill="url(#ballW)"/>
-    <text x="296" y="441" font-size="34" fill="#16203a">45</text>
-    <circle cx="374" cy="428" r="39" fill="url(#ballW)"/>
-    <text x="374" y="441" font-size="34" fill="#16203a">51</text>
-    <circle cx="452" cy="428" r="39" fill="url(#ballR)"/>
-    <text x="452" y="441" font-size="34" fill="#ffffff">18</text>
+    <circle cx="62" cy="432" r="39" fill="url(#ballW)"/>
+    <text x="62" y="445" font-size="34" fill="#16203a">9</text>
+    <circle cx="140" cy="432" r="39" fill="url(#ballW)"/>
+    <text x="140" y="445" font-size="34" fill="#16203a">13</text>
+    <circle cx="218" cy="432" r="39" fill="url(#ballW)"/>
+    <text x="218" y="445" font-size="34" fill="#16203a">28</text>
+    <circle cx="296" cy="432" r="39" fill="url(#ballW)"/>
+    <text x="296" y="445" font-size="34" fill="#16203a">45</text>
+    <circle cx="374" cy="432" r="39" fill="url(#ballW)"/>
+    <text x="374" y="445" font-size="34" fill="#16203a">51</text>
+    <circle cx="452" cy="432" r="39" fill="url(#ballR)"/>
+    <text x="452" y="445" font-size="34" fill="#ffffff">18</text>
   </g>
 </svg>

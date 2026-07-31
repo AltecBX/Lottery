@@ -375,3 +375,27 @@ export function topIndices(arr: Float64Array, K: number, m: number): number[] {
   idx.sort((a, b) => arr[b] - arr[a] || a - b)
   return idx.slice(0, m)
 }
+
+/**
+ * Same ordering as topIndices (value desc, index asc on ties) but selects only
+ * the top m by insertion — the hot path in the backtest, which needs a top-10
+ * per signal per draw and never the full ranking.
+ */
+export function topIndicesPartial(arr: Float64Array, K: number, m: number): number[] {
+  if (m >= K) return topIndices(arr, K, m)
+  const out: number[] = []
+  for (let i = 1; i <= K; i++) {
+    const v = arr[i]
+    if (out.length === m && !(v > arr[out[m - 1]])) continue
+    let lo = 0, hi = out.length
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      // strictly-greater goes earlier; equal values keep ascending index order
+      if (arr[out[mid]] > v || (arr[out[mid]] === v && out[mid] < i)) lo = mid + 1
+      else hi = mid
+    }
+    out.splice(lo, 0, i)
+    if (out.length > m) out.pop()
+  }
+  return out
+}

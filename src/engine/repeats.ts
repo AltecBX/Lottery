@@ -1,5 +1,4 @@
 import type { Draw } from './types.ts'
-import { popcount } from './state.ts'
 import { choose } from './odds.ts'
 
 export interface RepeatPair {
@@ -54,34 +53,43 @@ export function analyzeRepeats(draws: Draw[], K: number, D: number): RepeatAnaly
   }
   exactRepeats.sort((a, b) => b.dates.length - a.dates.length)
 
-  // Pairwise overlaps via bitmasks
-  const words = Math.ceil((K + 1) / 32)
-  const masks: Uint32Array[] = draws.map((d) => {
-    const m = new Uint32Array(words)
-    for (const v of d.sorted) if (v <= K) m[v >> 5] |= 1 << (v & 31)
-    return m
+  // Pairwise overlaps via an inverted index: only pairs that actually share a
+  // number are visited, so this is O(n·D·n·D/K) instead of O(n²·words).
+  const postings: number[][] = Array.from({ length: K + 1 }, () => [])
+  draws.forEach((d, i) => {
+    for (const v of d.sorted) if (v >= 1 && v <= K) postings[v].push(i)
   })
   const pairsByOverlap = new Array<number>(D + 1).fill(0)
+  const shareCount = new Int32Array(n)
+  const touched = new Int32Array(n)
   let maxOverlap = 0
   let closestPairs: RepeatPair[] = []
+  let pairsWithOverlap = 0
   for (let a = 0; a < n; a++) {
-    const ma = masks[a]
-    for (let b = a + 1; b < n; b++) {
-      const mb = masks[b]
-      let o = 0
-      for (let w = 0; w < words; w++) o += popcount(ma[w] & mb[w])
-      pairsByOverlap[o]++
-      if (o > maxOverlap) {
-        maxOverlap = o
-        closestPairs = []
+    let nTouched = 0
+    for (const v of draws[a].sorted) {
+      if (v < 1 || v > K) continue
+      for (const b of postings[v]) {
+        if (b <= a) continue
+        if (shareCount[b] === 0) touched[nTouched++] = b
+        shareCount[b]++
       }
-      if (o === maxOverlap && closestPairs.length < 4 && o > 0) {
-        const shared: number[] = []
-        for (const v of draws[a].sorted) if (draws[b].sorted.includes(v)) shared.push(v)
+    }
+    for (let t = 0; t < nTouched; t++) {
+      const b = touched[t]
+      const o = shareCount[b]
+      shareCount[b] = 0
+      pairsByOverlap[o]++
+      pairsWithOverlap++
+      if (o > maxOverlap) { maxOverlap = o; closestPairs = [] }
+      if (o === maxOverlap && closestPairs.length < 4) {
+        const shared = draws[a].sorted.filter((v) => draws[b].sorted.includes(v))
         closestPairs.push({ dateA: draws[a].date, dateB: draws[b].date, shared })
       }
     }
   }
+  // Pairs sharing nothing are the remainder — never enumerated, just counted.
+  pairsByOverlap[0] = pairsTotal - pairsWithOverlap
 
   // Chance expectation for each overlap level: hypergeometric pmf × total pairs
   const expectedByOverlap = new Array<number>(D + 1).fill(0)

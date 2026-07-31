@@ -11,6 +11,7 @@ export function TrendsPanel({ res, settings, onWindowChange }: {
   const top10 = new Set(res.top10.map((p) => p.number))
   return (
     <SectionCard
+      collapsible
       id="trends"
       title="Recent trends & frequency"
       sub="Momentum compares each number's rate in the last 10 draws to its last-50 rate. The chart shows appearance counts in the selected window — orange bars are numbers currently in the model's top 10."

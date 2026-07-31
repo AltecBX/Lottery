@@ -1,6 +1,6 @@
 import type { BacktestPoint, BacktestSummary, Draw, SignalPerformance } from './types.ts'
 import { HistoryState } from './state.ts'
-import { computeRawSignals, computeSpecialRawSignals, SIGNAL_LABEL, signalKeys, SPECIAL_SIGNAL_KEYS, topIndices, zNormalize } from './signals.ts'
+import { computeRawSignals, computeSpecialRawSignals, SIGNAL_LABEL, signalKeys, SPECIAL_SIGNAL_KEYS, topIndices, topIndicesPartial, zNormalize } from './signals.ts'
 
 export const MIN_HISTORY = 30
 
@@ -184,7 +184,7 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
       // Per-signal evaluation (top-10 hit count)
       const sigHits: Record<string, number> = {}
       for (let s = 0; s < keys.length; s++) {
-        const top10 = topIndices(zs[s], K, Math.min(10, K))
+        const top10 = topIndicesPartial(zs[s], K, Math.min(10, K))
         let h = 0
         for (const i of top10) if (actual.has(i)) h++
         sigHits[keys[s]] = h
@@ -245,7 +245,7 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
         const sKeys = sRaws.map((r) => r.key)
         const sSigHits: Record<string, number> = {}
         for (let i = 0; i < sKeys.length; i++) {
-          const top3 = topIndices(sZs[i], specialKs, Math.min(3, specialKs))
+          const top3 = topIndicesPartial(sZs[i], specialKs, Math.min(3, specialKs))
           sSigHits[sKeys[i]] = top3.includes(target.special) ? 1 : 0
         }
         const sWeights = weightsFromSkills(sKeys, sSkillUsed(), sEvaluated, sChance3)

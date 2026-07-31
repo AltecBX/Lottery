@@ -1,13 +1,14 @@
 import { Fragment, useState } from 'react'
 import type { EngineResult } from '../engine/types.ts'
 import { SIGNAL_LABEL } from '../engine/signals.ts'
-import { SectionCard, Ball, EdgeChip, fmtPct } from './shared.tsx'
+import { SectionCard, Ball, EdgeChip, fmtPct, useIsPhone } from './shared.tsx'
 
 export function RankingTable({ res }: { res: EngineResult }) {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [showAll, setShowAll] = useState(false)
   const [sortKey, setSortKey] = useState<'rank' | 'number'>('rank')
   const [asc, setAsc] = useState(true)
+  const isPhone = useIsPhone()
   const base = showAll ? res.predictions.slice(0, 20) : res.top10
   const rows = [...base].sort((a, b) => {
     const v = sortKey === 'number' ? a.number - b.number : a.rank - b.rank
@@ -33,6 +34,50 @@ export function RankingTable({ res }: { res: EngineResult }) {
         </button>
       }
     >
+      {isPhone ? (
+        <div className="rank-cards">
+          {rows.map((p) => {
+            const top = p.contributions.find((c) => c.contribution > 0 && c.reason)
+            const isOpen = expanded === p.number
+            return (
+              <div
+                className={`rank-card${p.rank <= res.drawSize ? ' picked' : ''}`}
+                key={p.number}
+                onClick={() => setExpanded(isOpen ? null : p.number)}
+              >
+                <span className="rk">#{p.rank}</span>
+                <Ball n={p.number} size="md" variant={p.rank <= res.drawSize ? 'pick' : ''} />
+                <div className="rc-main">
+                  <div className="rc-top">
+                    <span className="prob">{fmtPct(p.probability)}</span>
+                    <EdgeChip probability={p.probability} chance={res.drawSize / res.K} />
+                  </div>
+                  <div className="rc-reason">{isOpen ? '' : top?.reason ?? '—'}</div>
+                  {isOpen && (
+                    <div className="why-list" style={{ marginTop: 4 }}>
+                      {p.contributions.slice(0, 3).map((c) => (
+                        <div className="why-item" key={c.key}>
+                          <span className={`w ${c.contribution >= 0 ? 'pos' : 'neg'}`}>
+                            {c.contribution >= 0 ? '+' : ''}{c.contribution.toFixed(2)}
+                          </span>
+                          <span className="txt">{c.reason || SIGNAL_LABEL[c.key]?.description || '—'}</span>
+                        </div>
+                      ))}
+                      <div className="why-item">
+                        <span className="w" style={{ color: 'var(--muted)' }}>stats</span>
+                        <span className="txt">
+                          drawn {p.stats.count}× · last seen {p.stats.drawsSinceSeen} draws ago · avg gap{' '}
+                          {p.stats.meanGap.toFixed(1)} · {p.stats.last20} hits in last 20
+                        </span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
       <div className="tbl-wrap">
         <table className="tbl">
           <thead>
@@ -100,6 +145,7 @@ export function RankingTable({ res }: { res: EngineResult }) {
           </tbody>
         </table>
       </div>
+      )}
     </SectionCard>
   )
 }

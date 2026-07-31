@@ -285,6 +285,10 @@ export interface EngineResult {
   repeats: import('./repeats.ts').RepeatAnalysis | null
   /** True when the model's best combination has never been drawn in this history */
   bestComboIsNew: boolean | null
+  /** Per-column (order-statistic) analysis: each draw column vs its own history */
+  positionAnalysis: import('./positions.ts').PositionAnalysis | null
+  /** How the best combination's column shape compares to that history */
+  bestComboFit: import('./positions.ts').PositionalFit | null
 
   hot: HotColdEntry[]
   cold: HotColdEntry[]

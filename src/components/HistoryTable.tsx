@@ -26,6 +26,7 @@ export function HistoryTable({ draws, exportName, onDelete }: { draws: Draw[]; e
 
   return (
     <SectionCard
+      collapsible
       id="history"
       title="Historical data"
       hint={`${draws.length.toLocaleString()} draws`}
