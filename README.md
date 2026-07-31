@@ -70,16 +70,17 @@ Date       | Day of Week | Number 1 | Number 2 | Number 3 | Number 4 | Number 5 
 
 ## The analysis engine
 
-Nineteen signals are computed for every number, strictly from data prior to the draw being predicted:
+Twenty-one signals are computed for every number, strictly from data prior to the draw being predicted:
 
 | Family | Signals |
 |---|---|
 | Frequency | overall frequency · day-of-week frequency · recent form on the target weekday · recency at three time scales (half-lives 8 / 20 / 45) · last 10 / 20 / 50 windows · number-line zones (kernel-smoothed) |
-| Gap dynamics | draws since last seen vs own average gap (overdue) · gap-rhythm/cycle fit |
+| Gap dynamics | draws since last seen vs own average gap (overdue) · pooled discrete-hazard rate (measured P(hit \| current gap), the statistically honest "overdue") · gap-rhythm/cycle fit |
 | Momentum | hot-streak z-score · short-vs-long window momentum · consecutive-appearance streaks |
 | Sequence | repeat-from-last-draw probability · follower transitions (P(i next \| j previous)) · day-of-week × previous-draw transitions |
 | Structure | positional value distributions · pair co-occurrence lift (used in combos) |
 | Analogy | k-nearest similar historical situations (previous draw overlap + weekday + draw shape) and what followed them |
+| Machine-learned | an online multinomial-regression combiner (below) whose output joins the ensemble as a signal |
 
 ## The prediction engine
 
@@ -91,6 +92,13 @@ Nineteen signals are computed for every number, strictly from data prior to the 
   flat and the app says so. (A per-weekday weight adaptation was evaluated and removed: it added no accuracy
   on structured data and amplified weekday noise streaks on random data; weekday structure lives in the
   per-number signals instead.)
+- **A trained regression model sits inside the ensemble**: an online multinomial logistic model (softmax over
+  the pool, the drawn numbers as positives) is re-trained after every draw by AdaGrad gradient descent on the
+  walk-forward log-likelihood — a proper scoring rule. Unlike the z-score blend, it learns how signals interact
+  and how much each one is worth *jointly*. Its logits enter the ensemble as the `mlModel` signal, subject to
+  the same significance gate as everything else, and its probability quality is reported as walk-forward
+  log-score vs uniform (positive = its probabilities genuinely beat chance on unseen draws; hyperparameters
+  were chosen so that on fair random data the score stays ≈ 0 instead of going over-confident).
 - **Probabilities are calibrated**: the "estimated probability" for rank *r* is the smoothed, isotonic-regressed
   historical hit rate of rank-*r* predictions in the backtest — not a softmax guess.
 - Output: top-5 with confidence levels, top-10 candidates, expandable per-number explanations (signal

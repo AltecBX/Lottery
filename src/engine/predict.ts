@@ -1,5 +1,5 @@
 import type { NumberPrediction, NumberStats } from './types.ts'
-import { HistoryState } from './state.ts'
+import { HAZARD_GMAX, HistoryState } from './state.ts'
 import { computeRawSignals, SIGNAL_LABEL, zNormalize, type SignalContext } from './signals.ts'
 import { DOW_NAMES } from './dates.ts'
 
@@ -104,6 +104,16 @@ function reasonFor(key: string, i: number, state: HistoryState, ctx: SignalConte
       return `Matches the value ranges the feed's positions usually produce`
     case 'similarity':
       return `Appeared often after the most similar historical situations`
+    case 'hazard': {
+      const g = Math.min(HAZARD_GMAX, state.drawsSince(i))
+      const exp = state.hazardExp[g]
+      const hit = state.hazardHits[g]
+      return exp >= 20
+        ? `Numbers at a ${g}-draw gap have historically hit ${pct(hit / exp)} of the time here`
+        : ''
+    }
+    case 'mlModel':
+      return `Ranked high by the trained regression model that weighs every signal at once`
     default:
       return ''
   }
@@ -121,10 +131,25 @@ export function predictNext(
   rankHitRate: number[],
   evaluated: number,
   usePosition: boolean,
+  mlWeights: number[] | null = null,
 ): PredictOutput {
   const K = state.K
   const rawSignals = computeRawSignals(state, ctx, usePosition)
   const zs = rawSignals.map((s) => ({ key: s.key, z: zNormalize(s.raw, K) }))
+
+  // The trained combiner's logits join as one more signal (same feature order
+  // as the backtest that fit the coefficients)
+  if (mlWeights && mlWeights.length > 0) {
+    const logits = new Float64Array(K + 1)
+    const F = Math.min(mlWeights.length, zs.length)
+    for (let s = 0; s < F; s++) {
+      const w = mlWeights[s]
+      if (w === 0) continue
+      const z = zs[s].z
+      for (let i = 1; i <= K; i++) logits[i] += w * z[i]
+    }
+    zs.push({ key: 'mlModel', z: zNormalize(logits, K) })
+  }
 
   const ensemble = new Float64Array(K + 1)
   for (const { key, z } of zs) {

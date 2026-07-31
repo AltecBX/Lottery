@@ -3,6 +3,9 @@ import type { Draw } from './types.ts'
 /** Draws remembered per weekday for the "recent form on this weekday" signal. */
 export const DOW_WINDOW = 8
 
+/** Gap lengths above this pool into one bucket in the hazard histogram. */
+export const HAZARD_GMAX = 199
+
 /**
  * Incrementally-built view of history. During the walk-forward backtest the
  * state at step t contains ONLY draws 0..t-1, so every signal computed from it
@@ -54,6 +57,14 @@ export class HistoryState {
   repeatOpp = 0
 
   posCounts: Uint32Array // p*(K+1)+i for positions 0..D-1
+
+  /**
+   * Pooled discrete-hazard histogram: for every (number, draw) moment, how many
+   * numbers were sitting at gap g (exposures) and how many of those hit. The
+   * ratio is the honest, measured P(hit | current gap = g).
+   */
+  hazardExp = new Float64Array(HAZARD_GMAX + 1)
+  hazardHits = new Float64Array(HAZARD_GMAX + 1)
 
   sumSum = 0
   sumSumSq = 0
@@ -185,8 +196,16 @@ export class HistoryState {
       }
     }
 
-    // Core counts, gaps, streaks
+    // Hazard histogram — measured BEFORE counts/lastSeen mutate, so gap g is
+    // the gap each number carried into this draw (same value the signal reads)
     const inDraw = new Set(nums)
+    for (let i = 1; i <= this.K; i++) {
+      const g = Math.min(HAZARD_GMAX, this.lastSeen[i] < 0 ? t : t - this.lastSeen[i])
+      this.hazardExp[g]++
+      if (inDraw.has(i)) this.hazardHits[g]++
+    }
+
+    // Core counts, gaps, streaks
     for (const i of nums) {
       this.counts[i]++
       this.countsByDow[draw.dow * S + i]++

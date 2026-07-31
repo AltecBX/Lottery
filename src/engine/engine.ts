@@ -127,7 +127,7 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
 
   const activeWeights = bt.weights
   const ctx = { targetDow: nextDow, prev: draws[draws.length - 1] }
-  const { predictions } = predictNext(state, ctx, activeWeights, bt.rankHitRate, bt.summary.evaluated, usePosition)
+  const { predictions } = predictNext(state, ctx, activeWeights, bt.rankHitRate, bt.summary.evaluated, usePosition, bt.mlWeights)
   const combos = buildCombos(state, predictions)
 
   const weightEntries = Object.entries(activeWeights).sort((a, b) => b[1] - a[1])

@@ -212,6 +212,60 @@ describe('walk-forward backtest', () => {
   })
 })
 
+function fairRandomDraws(seed: number, n: number, K: number, drawSize: number): Draw[] {
+  let a = seed >>> 0
+  const rand = () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const out: Draw[] = []
+  const dt = new Date(2020, 0, 6)
+  for (let i = 0; i < n; i++) {
+    const set = new Set<number>()
+    while (set.size < drawSize) set.add(1 + Math.floor(rand() * K))
+    const sorted = [...set].sort((x, y) => x - y)
+    const iso = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+    out.push({ date: iso, dow: dt.getDay(), numbers: sorted, sorted })
+    dt.setDate(dt.getDate() + [2, 2, 3][i % 3])
+  }
+  return out
+}
+
+describe('learned combiner (online regression)', () => {
+  it('earns real probability skill on structured data', () => {
+    const bt = runBacktest(generateSampleDraws(), 49, 6, false)
+    // Positive walk-forward log-likelihood vs uniform = genuine probability skill
+    expect(bt.summary.mlSkillNats).toBeGreaterThan(0.05)
+    const ml = bt.summary.signals.find((s) => s.key === 'mlModel')
+    expect(ml).toBeDefined()
+    expect(ml!.skill).toBeGreaterThan(0.15)
+    // It should earn more than a uniform share of the ensemble
+    expect(ml!.weight).toBeGreaterThan(1 / bt.summary.signals.length)
+  })
+
+  it('stays honest on fair random draws: no over-confidence, no stolen weight', () => {
+    const bt = runBacktest(fairRandomDraws(777, 700, 69, 5), 69, 5, false)
+    // Log-score against uniform must stay near zero (slightly negative is the
+    // cost of learning; large negative would mean over-confident noise-fitting)
+    expect(Math.abs(bt.summary.mlSkillNats ?? 0)).toBeLessThan(0.06)
+    const uniform = 1 / bt.summary.signals.length
+    const ml = bt.summary.signals.find((s) => s.key === 'mlModel')
+    expect(ml!.weight).toBeLessThan(2 * uniform)
+  })
+
+  it('hazard histogram accounts for every (number, draw) exposure', () => {
+    const draws = fairRandomDraws(42, 120, 30, 4)
+    const st = new HistoryState(30, 4)
+    for (const d of draws) st.push(d)
+    let exp = 0, hits = 0
+    for (let g = 0; g < st.hazardExp.length; g++) { exp += st.hazardExp[g]; hits += st.hazardHits[g] }
+    expect(exp).toBe(120 * 30)
+    expect(hits).toBe(120 * 4)
+  })
+})
+
 function powerballLike(n: number): Draw[] {
   // 5-of-69 mains + 1-of-26 special with a mildly hot special value
   let seed = 0xbeef

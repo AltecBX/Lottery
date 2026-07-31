@@ -225,6 +225,8 @@ input, select, textarea { font: inherit; color: var(--ink); }
 .tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
 .tbl tbody tr:hover { background: var(--surface-2); }
 .tbl-wrap { overflow-x: auto; }
+.tbl th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+.tbl th.sortable:hover { color: var(--accent); }
 .rank-expand td { background: var(--surface-2); }
 .why-list { display: grid; gap: 6px; padding: 6px 2px; }
 .why-item { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
