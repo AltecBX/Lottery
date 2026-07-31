@@ -351,6 +351,50 @@ export default function App() {
   const staleDays = activeGame?.syncKey && hasData ? daysSinceLastDraw(activeGame, Date.now()) : 0
   const showStaleNudge = !!activeGame?.syncKey && hasData && staleDays > 4
 
+  /**
+   * Jump to a section, then correct.
+   *
+   * Offscreen panels are skipped by `content-visibility` and stand in at an
+   * estimated height, so a single scroll lands wherever those estimates happen
+   * to add up — one jump measured 1,065px short. Each pass renders the panels
+   * it brings near the viewport, which replaces estimates with real heights, so
+   * repeating until the target sits under the nav converges in two or three
+   * frames and reads as one instant move.
+   */
+  const jumpTo = useCallback((id: string) => {
+    const el = document.getElementById(id)
+    if (!el) return
+    const navBottom = document.querySelector('.nav')?.getBoundingClientRect().bottom ?? 0
+    const want = navBottom + 10
+    let passes = 0
+    let stable = 0
+    let cancelled = false
+    // A swipe mid-correction must win — never fight the user's thumb
+    const abort = () => { cancelled = true }
+    window.addEventListener('touchstart', abort, { once: true, passive: true })
+    window.addEventListener('wheel', abort, { once: true, passive: true })
+
+    const align = () => {
+      if (cancelled) return
+      const delta = el.getBoundingClientRect().top - want
+      if (Math.abs(delta) > 2) {
+        window.scrollBy({ top: delta, behavior: 'instant' as ScrollBehavior })
+        stable = 0
+      } else {
+        // One good frame proves nothing: panels resolve their real height a
+        // frame or two after the scroll that brought them into range.
+        stable++
+      }
+      if (stable < 6 && ++passes < 30) requestAnimationFrame(align)
+      else {
+        window.removeEventListener('touchstart', abort)
+        window.removeEventListener('wheel', abort)
+      }
+    }
+    align()
+    setActiveSection(id)
+  }, [])
+
   // Scrollspy: highlight the section currently in view in the section nav
   useEffect(() => {
     if (!hasData || !result?.ok) return
@@ -410,7 +454,14 @@ export default function App() {
           {hasData && (
             <nav className="nav">
               {NAV.map(([id, label]) => (
-                <a key={id} href={`#${id}`} className={activeSection === id ? 'active' : ''}>{label}</a>
+                <a
+                  key={id}
+                  href={`#${id}`}
+                  className={activeSection === id ? 'active' : ''}
+                  onClick={(e) => { e.preventDefault(); jumpTo(id) }}
+                >
+                  {label}
+                </a>
               ))}
             </nav>
           )}
@@ -577,7 +628,7 @@ export default function App() {
         <button className="primary" onClick={() => setDialog('add')} disabled={!hasData}>
           <span className="ico">＋</span> Add result
         </button>
-        <button onClick={() => document.getElementById('ticket')?.scrollIntoView({ behavior: 'smooth' })} disabled={!hasData}>
+        <button onClick={() => jumpTo('ticket')} disabled={!hasData}>
           <span className="ico">🎟</span> Tickets
         </button>
         <button onClick={() => setDialog('menu')}>

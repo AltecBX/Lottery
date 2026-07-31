@@ -48,7 +48,9 @@
   --shadow-lift: 0 2px 6px rgba(19, 26, 42, 0.07), 0 14px 40px rgba(19, 26, 42, 0.12);
   --radius: 16px;
   --font-display: 'Space Grotesk Variable', 'Space Grotesk', 'Inter Variable', system-ui, sans-serif;
-  --header-glass: rgba(244, 246, 250, 0.82);
+  --header-glass: rgba(244, 246, 250, 0.92);
+  --brand-row: 64px;
+  --nav-row: 44px;
 }
 
 :root[data-theme='dark'] {
@@ -91,12 +93,32 @@
 
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 34px rgba(0, 0, 0, 0.35);
   --shadow-lift: 0 2px 8px rgba(0, 0, 0, 0.4), 0 18px 52px rgba(0, 0, 0, 0.5);
-  --header-glass: rgba(6, 10, 19, 0.72);
+  --header-glass: rgba(6, 10, 19, 0.9);
 }
 
 /* ---------- Base ---------- */
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
+/*
+ * Native feel on iOS. The grey flash on tap is the single most "web page"
+ * tell there is, so it goes; `touch-action: manipulation` drops the 300ms
+ * double-tap wait; and containing overscroll stops a sheet's rubber-band from
+ * dragging the page behind it.
+ */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  overscroll-behavior-y: contain;
+}
+body { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+button, a, select, summary, [role='tab'], .card-head.tappable {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+/* Chrome is furniture, not content — long-pressing it should not select text */
+.nav, .game-tabs, .mobile-bar, .brand, .card-head, .tile .label, .flip-label {
+  -webkit-user-select: none; user-select: none;
+}
+html { scroll-behavior: smooth; scroll-padding-top: calc(var(--nav-row) + 8px); }
 body {
   margin: 0;
   background: var(--page);
@@ -212,7 +234,11 @@ input, select, textarea { font: inherit; color: var(--ink); }
 .nav {
   display: flex; gap: 4px; overflow-x: auto; padding: 4px 0 10px;
   scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
 }
+.nav a { scroll-snap-align: center; }
 .nav::-webkit-scrollbar { display: none; }
 .nav a {
   white-space: nowrap; padding: 5px 12px; border-radius: 999px;
@@ -291,6 +317,7 @@ input, select, textarea { font: inherit; color: var(--ink); }
 .card-sub { font-size: 13px; color: var(--ink-2); margin-bottom: 13px; max-width: 980px; }
 
 .section-anchor { scroll-margin-top: 118px; }
+.show-sm { display: none; }
 
 /* ---------- Number balls & chips ---------- */
 .ball {
@@ -339,7 +366,7 @@ input, select, textarea { font: inherit; color: var(--ink); }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* ---------- Stat tiles ---------- */
-.tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); }
+.tiles { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); grid-auto-rows: 1fr; }
 .tile {
   background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 88%, #9db8ff 3%), var(--surface-2));
   border-radius: 13px; padding: 13px 15px;
@@ -405,7 +432,8 @@ input, select, textarea { font: inherit; color: var(--ink); }
 .tbl .num { text-align: right; font-variant-numeric: tabular-nums; }
 .tbl tbody tr { transition: background 0.12s ease; }
 .tbl tbody tr:hover { background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
-.tbl-wrap { overflow-x: auto; scrollbar-width: thin; border-radius: 10px; }
+.tbl-wrap {
+  -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; overflow-x: auto; scrollbar-width: thin; border-radius: 10px; }
 .tbl-wrap::-webkit-scrollbar { height: 8px; }
 .tbl-wrap::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 .tbl th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
@@ -683,20 +711,50 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 @media (max-width: 760px) {
   body { font-size: 14.5px; }
   .container { padding: 0 14px; }
-  /* wrap, so the game tabs drop to their own line instead of squeezing the mark */
-  .header-row { padding: 10px 0 6px; gap: 10px; flex-wrap: wrap; }
+  /* iOS large-title behaviour: the brand row scrolls up out of the sticky
+     header and only the section nav stays pinned. The negative offset is the
+     brand row's own height, so 128px of chrome becomes 44px. */
+  .header {
+    top: calc(-1 * var(--brand-row) + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+  }
+  .header-row {
+    height: var(--brand-row); padding: 0; gap: 10px;
+    flex-wrap: nowrap; align-items: center;
+  }
   .brand-mark { width: 42px; height: 42px; }
   .brand-mark svg { width: 42px; height: 42px; }
-  .brand-lockup { height: 48px; }
-  :root:not([data-theme='dark']) .brand { padding: 4px 9px; border-radius: 11px; }
+  .brand-lockup { height: 44px; }
+  :root:not([data-theme='dark']) .brand { padding: 3px 8px; border-radius: 10px; }
   .brand-word .jerry { font-size: 16px; }
   .brand-word .lab { font-size: 7.6px; letter-spacing: 0.2em; white-space: nowrap; }
   .header-actions { display: none; }
-  .game-tabs { order: 3; width: 100%; overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; }
+  /* the tabs take the rest of the row and scroll sideways rather than wrapping */
+  .game-tabs {
+    flex: 1 1 auto; min-width: 0; margin-left: auto;
+    overflow-x: auto; flex-wrap: nowrap; justify-content: flex-end;
+    scrollbar-width: none; overscroll-behavior-x: contain;
+  }
   .game-tabs::-webkit-scrollbar { display: none; }
-  .game-tabs button { white-space: nowrap; padding: 8px 15px; }
-  .nav { padding-bottom: 9px; }
-  .nav a { padding: 7px 13px; font-size: 12.5px; }
+  .game-tabs button { white-space: nowrap; padding: 9px 15px; font-size: 14px; }
+  .nav { padding: 0; height: var(--nav-row); align-items: center; }
+  .nav a { padding: 8px 13px; font-size: 13px; }
+  .section-anchor { scroll-margin-top: calc(var(--nav-row) + 10px); }
+
+  /* Apple's 44pt minimum, and a press state on everything that responds */
+  .nav a { min-height: 44px; display: inline-flex; align-items: center; }
+  .game-tabs button, .btn, .btn.sm, .linky { min-height: 44px; }
+  .icon-btn { min-width: 44px; min-height: 44px; }
+  .nd-amount { min-height: 48px; }
+  .tbl th.sortable { padding-top: 13px; padding-bottom: 13px; }
+  /* a checkbox is 13px of paint, so the row it sits in carries the hit area */
+  .chk { min-height: 44px; align-items: center; }
+  .chk input[type=checkbox] { width: 22px; height: 22px; flex: none; accent-color: var(--accent); }
+  .rng input[type=range] { height: 34px; }
+  .btn:active, .game-tabs button:active, .nav a:active {
+    transform: scale(0.97); opacity: 0.85;
+  }
+  .saved-ticket:active, .pf-ticket:active, .rank-card:active { transform: scale(0.995); }
 
   .mobile-bar { display: grid; }
   .main { padding: 14px 0 100px; }
@@ -705,9 +763,28 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 
   .grid { gap: 13px; }
   .card { padding: 16px 15px 18px; border-radius: 16px; }
+  /*
+   * Nineteen panels, ten thousand pixels. Offscreen cards are skipped entirely
+   * until they approach the viewport; the intrinsic size keeps the scrollbar
+   * honest so the page does not jump as they resolve. Folded cards are already
+   * tiny, so they opt out and stay measured exactly.
+   */
+  .card:not(.folded) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 640px;
+  }
+  /* an anchored card must render immediately, not on approach */
+  .card:target, .card:has(:focus-visible) { content-visibility: visible; }
   .card-head h2 { font-size: 16px; }
   .card-sub { font-size: 12.5px; }
   @media (pointer: coarse) { .card:hover { transform: none; } }
+
+  /* title and Share share row one, the date takes row two — a wrapped flex
+     row gave the button a line of its own and cost ~56px */
+  .hero-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 10px; }
+  .hero-top h2 { grid-column: 1; grid-row: 1; }
+  .hero-top > span:last-child { grid-column: 2; grid-row: 1; margin-left: 0 !important; }
+  .hero-date { grid-column: 1 / -1; grid-row: 2; }
 
   .ball.hero { width: 49px; height: 49px; font-size: 19px; }
   .hero-balls { gap: 9px; justify-content: center; }
@@ -716,14 +793,21 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   .hero-ball-wrap .conf { font-size: 8.5px; }
   .hero-drivers { max-width: none; }
   .tiles { grid-template-columns: repeat(2, 1fr); gap: 9px; }
-  .tile { padding: 11px 13px; }
+  /* equal heights, and the label reserves its two lines so values line up */
+  .tile { padding: 11px 12px; display: grid; grid-template-rows: auto auto 1fr; }
   .tile .value { font-size: 21px; }
-  .tile .label { font-size: 10.2px; }
+  .tile .label { font-size: 10.4px; letter-spacing: 0.05em; }
+  .tile .delta { font-size: 11.5px; line-height: 1.3; }
+  .header { backdrop-filter: blur(14px) saturate(1.3); -webkit-backdrop-filter: blur(14px) saturate(1.3); }
 
   .hide-sm { display: none !important; }
+  .show-sm { display: grid !important; }
   .tbl { font-size: 13px; }
-  .tbl th { padding: 7px 8px; }
+  .tbl th { padding: 7px 8px; font-size: 12px; }
   .tbl td { padding: 8px 8px; }
+  .tbl td .sub, .tbl .sub, .sub, .meta, .hint, .pf-idx, .col-fit .band,
+  .sim-row .lbl, .col-pick .meta, .col-tabs .rng, .col-fact .d { font-size: 12px; }
+  .tbl th { font-size: 12px; }
 
   /* Collapsed secondary panels: the screen leads with predictions */
   .card.folded { padding: 4px 15px; }
@@ -863,10 +947,12 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   display: flex; gap: 9px; align-items: flex-start; flex: none;
 }
 .flip-clock.sm { --fc-w: 46px; --fc-h: 46px; --fc-fs: 27px; --fc-radius: 9px; }
-.flip-unit { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+/* the tile width is the unit width: a tracked label must not widen the row */
+.flip-unit { display: flex; flex-direction: column; align-items: center; gap: 6px; width: var(--fc-w); }
 .flip-label {
   font-size: 9px; font-weight: 700; letter-spacing: 0.17em; text-transform: uppercase;
   color: var(--gold); font-family: var(--font-display);
+  white-space: nowrap; margin-right: -0.17em; /* absorb the trailing letter-space */
 }
 .flip-card {
   position: relative; width: var(--fc-w); height: var(--fc-h);
@@ -930,6 +1016,21 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 .chk { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2); }
 .value-controls { display: flex; gap: 20px; flex-wrap: wrap; align-items: center; margin: 14px 0 4px; }
 .pf-tickets { display: grid; gap: 8px; margin-bottom: 14px; }
+.cmp-cards { display: none; gap: 9px; }
+.cmp-card {
+  border: 1px solid var(--border); border-radius: 13px; padding: 11px 13px;
+  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
+}
+.cmp-card.best { border-color: color-mix(in srgb, var(--gold) 46%, transparent); background: var(--gold-wash); }
+.cmp-title { font-weight: 640; font-size: 14px; }
+.cmp-title .sub { display: block; font-size: 12px; color: var(--muted); font-weight: 500; margin-top: 1px; }
+.cmp-figs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin: 10px 0 0; }
+.cmp-figs > div { display: flex; flex-direction: column; gap: 1px; }
+.cmp-figs dt { font-size: 11.5px; color: var(--muted); }
+.cmp-figs dd {
+  margin: 0; font-family: var(--font-display); font-weight: 660; font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
 .pf-ticket {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   border: 1px solid var(--border); border-radius: 12px; padding: 8px 11px;
@@ -939,7 +1040,7 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 .pf-idx { font-size: 11px; color: var(--muted); font-weight: 660; font-family: var(--font-display); width: 22px; }
 .pf-ticket .btn { margin-left: auto; }
 .tbl .row-best td { background: color-mix(in srgb, var(--gold) 9%, transparent); }
-.tbl td .sub { display: block; font-size: 11px; color: var(--muted); font-weight: 500; }
+.tbl td .sub { display: block; font-size: 12px; color: var(--muted); font-weight: 500; }
 
 /* ---------- Draw recap ---------- */
 .recap {
@@ -971,7 +1072,17 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   .flip-clock { --fc-w: 56px; --fc-h: 56px; --fc-fs: 34px; justify-content: center; gap: 8px; }
   .flip-clock.sm { --fc-w: 42px; --fc-h: 42px; --fc-fs: 25px; }
   .pf-controls { gap: 12px; }
-  .pf-ticket .btn { margin-left: 0; }
+  /* balls + action on one line: five stacked Save buttons cost ~200px of screen */
+  .pf-ticket {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center;
+    gap: 8px; padding: 7px 9px; flex-wrap: nowrap;
+  }
+  .pf-ticket .balls { gap: 5px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .pf-ticket .balls::-webkit-scrollbar { display: none; }
+  .pf-ticket .btn { margin-left: 0; padding: 8px 12px; min-height: 44px; }
+  .pf-idx { width: 18px; }
+  .saved-ticket { padding: 8px 10px; gap: 6px; }
+  .saved-ticket .meta { flex-basis: 100%; margin-left: 0; }
   .recap-date { min-width: 0; }
   .ledger-totals { gap: 12px; }
   .ledger-totals .meta { margin-left: 0; width: 100%; }
