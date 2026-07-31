@@ -27,6 +27,7 @@ import { InspectorPanel } from './components/InspectorPanel.tsx'
 import { TicketLab } from './components/TicketLab.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 import { AddGameDialog } from './components/AddGameDialog.tsx'
+import { JPMonogram } from './components/Logo.tsx'
 
 const NAV = [
   ['prediction', 'Prediction'],
@@ -72,6 +73,7 @@ export default function App() {
   const [dialog, setDialog] = useState<'' | 'import' | 'add' | 'settings' | 'addgame' | 'menu'>('')
   const [flash, setFlash] = useState('')
   const [syncing, setSyncing] = useState(false)
+  const [activeSection, setActiveSection] = useState('')
 
   const games = gamesState.games
   const activeGame: GameData | undefined = games.find((g) => g.id === gamesState.activeId) ?? games[0]
@@ -284,6 +286,24 @@ export default function App() {
   const staleDays = activeGame?.syncKey && hasData ? daysSinceLastDraw(activeGame, Date.now()) : 0
   const showStaleNudge = !!activeGame?.syncKey && hasData && staleDays > 4
 
+  // Scrollspy: highlight the section currently in view in the section nav
+  useEffect(() => {
+    if (!hasData || !result?.ok) return
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (e.isIntersecting) { setActiveSection(e.target.id); break }
+        }
+      },
+      { rootMargin: '-18% 0px -72% 0px' },
+    )
+    for (const [id] of NAV) {
+      const el = document.getElementById(id)
+      if (el) obs.observe(el)
+    }
+    return () => obs.disconnect()
+  }, [hasData, result])
+
   return (
     <div className="app">
       <header className="header">
@@ -291,16 +311,12 @@ export default function App() {
           <div className="header-row">
             <div className="brand">
               <span className="brand-mark" aria-hidden="true">
-                <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-                  <circle cx="15" cy="15" r="13" fill="var(--accent)" />
-                  <circle cx="10.5" cy="10.5" r="4.5" fill="rgba(255,255,255,0.28)" />
-                  <circle cx="26" cy="25.5" r="8.5" fill="var(--hot)" stroke="var(--page)" strokeWidth="2.5" />
-                </svg>
+                <JPMonogram size={42} />
               </span>
-              <div>
-                <h1>Pattern Lab</h1>
-                <span className="sub">number prediction laboratory</span>
-              </div>
+              <h1 className="brand-word">
+                <span className="jerry">JERRY</span>
+                <span className="lab">Pattern Lab</span>
+              </h1>
             </div>
             {games.length > 0 && (
               <div className="game-tabs" role="tablist" aria-label="Games">
@@ -335,7 +351,7 @@ export default function App() {
           {hasData && (
             <nav className="nav">
               {NAV.map(([id, label]) => (
-                <a key={id} href={`#${id}`}>{label}</a>
+                <a key={id} href={`#${id}`} className={activeSection === id ? 'active' : ''}>{label}</a>
               ))}
             </nav>
           )}
@@ -346,12 +362,13 @@ export default function App() {
         <div className="container">
           {games.length === 0 && (
             <div className="empty-hero">
-              <h2>Track your games. Understand every number. Stay honest about the odds.</h2>
+              <div className="empty-logo" aria-hidden="true"><JPMonogram size={132} /></div>
+              <h2>Find the patterns. Test them honestly.</h2>
               <p>
-                Set up Powerball and Mega Millions with one tap — Pattern Lab downloads the full official history, keeps it
-                synced, and runs a transparent, self-testing statistical engine over each game separately: rankings,
-                calibrated probabilities, backtests, and a reality check that tells you exactly how much (or little) any
-                pattern is worth.
+                Set up Powerball and Mega Millions with one tap — Jerry Pattern Lab downloads the full official history,
+                keeps it synced, and runs a transparent, self-testing statistical engine over each game separately:
+                rankings, calibrated probabilities, machine-learned signal weights, backtests, and a reality check that
+                tells you exactly how much (or little) any pattern is worth.
               </p>
               <div className="empty-actions">
                 {OFFICIAL_GAMES.map((g) => (
@@ -456,11 +473,10 @@ export default function App() {
       <footer className="footer">
         <div className="container">
           <p>
-            Pattern Lab finds and honestly weighs historical patterns — the Reality check and Backtest panels show exactly
-            how much (or how little) any signal beats chance in your data. Fair lottery draws are random by design: no
-            analysis can predict them, and every prediction here is entertainment and statistics, never something to rely
-            on. Play only with money you can comfortably lose. If gambling stops feeling like fun, free confidential help
-            is available: call or text 1-800-GAMBLER (US). Your data stays in your browser; nothing about you is uploaded.
+            Jerry Pattern Lab finds and honestly weighs historical patterns — the Reality check and Backtest panels show
+            exactly how much (or how little) any signal beats chance in your data. Fair lottery draws are random by
+            design: treat every prediction as statistics, not certainty, and play only with money you can comfortably
+            lose. Your data stays in your browser; nothing about you is uploaded.
           </p>
         </div>
       </footer>

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useMeasure } from '../../hooks/useLocalStorage.ts'
 
 export interface LineSeries {
@@ -21,6 +21,7 @@ interface Props {
 export function LineChart({ xLabels, series, threshold, height = 220, yFormat = (v) => v.toFixed(2), yMaxHint }: Props) {
   const [ref, width] = useMeasure<HTMLDivElement>()
   const [hover, setHover] = useState<number | null>(null)
+  const gradId = useId()
 
   const M = { top: 10, right: 10, bottom: 24, left: 40 }
   const plotW = Math.max(0, width - M.left - M.right)
@@ -71,6 +72,25 @@ export function LineChart({ xLabels, series, threshold, height = 220, yFormat = 
           )}
           {threshold && (
             <line x1={M.left} x2={width - M.right} y1={y(threshold.value)} y2={y(threshold.value)} stroke="var(--muted)" strokeWidth={1.5} strokeDasharray="5 4" />
+          )}
+          {/* soft area under the primary series — emphasis, not a second encoding */}
+          {series.length > 0 && series[0].values.length > 1 && (
+            <>
+              <defs>
+                <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stopColor={series[0].color} stopOpacity={0.16} />
+                  <stop offset="1" stopColor={series[0].color} stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <path
+                d={
+                  series[0].values.map((v, i) => `${i === 0 ? 'M' : 'L'} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(' ') +
+                  ` L ${x(series[0].values.length - 1).toFixed(1)} ${(M.top + plotH).toFixed(1)} L ${x(0).toFixed(1)} ${(M.top + plotH).toFixed(1)} Z`
+                }
+                fill={`url(#${gradId})`}
+                stroke="none"
+              />
+            </>
           )}
           {series.map((s) => (
             <path

@@ -25,7 +25,7 @@ export function PredictionPanel({ res, gameName }: { res: EngineResult; gameName
   const share = async () => {
     const picks = res.topPick.map((p) => p.number).join('-')
     const sp = res.special?.picks[0]?.number
-    const text = `${gameName || 'Pattern Lab'} · ${DOW_NAMES[res.nextDow]} ${formatDate(res.nextDate)}\nPattern Lab picks: ${picks}${sp ? ` · Bonus ${sp}` : ''}\n(Statistical analysis for fun — every ticket has the same jackpot odds.)`
+    const text = `${gameName || 'Jerry Pattern Lab'} · ${DOW_NAMES[res.nextDow]} ${formatDate(res.nextDate)}\nJerry Pattern Lab picks: ${picks}${sp ? ` · Bonus ${sp}` : ''}\n(Statistical analysis for fun — every ticket has the same jackpot odds.)`
     try {
       if (navigator.share) await navigator.share({ text })
       else {

@@ -1,6 +1,6 @@
-# Pattern Lab — Number Prediction Laboratory
+# Jerry Pattern Lab
 
-A polished, fully client-side web app that analyzes a lottery-style draw history (date · day of week · the drawn
+A premium, fully client-side quantitative-research app that analyzes a lottery-style draw history (date · day of week · the drawn
 numbers — 5- and 6-number games are auto-detected, 4–10 supported, with or without a Powerball-style bonus ball),
 discovers the patterns hiding in it, and ranks the most probable numbers for the **next** draw — with every
 prediction explained, probability-calibrated, and honestly stress-tested by a walk-forward backtest.

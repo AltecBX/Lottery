@@ -1,12 +1,12 @@
 {
-  "name": "Pattern Lab — Number Prediction Laboratory",
-  "short_name": "Pattern Lab",
-  "description": "A transparent statistical laboratory for Powerball, Mega Millions and custom games: honest analysis, self-testing predictions, calibrated probabilities.",
+  "name": "Jerry Pattern Lab",
+  "short_name": "Jerry Lab",
+  "description": "A premium statistical laboratory for Powerball, Mega Millions and custom games: honest analysis, self-testing predictions, machine-learned signal weights, calibrated probabilities.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0a1533",
-  "theme_color": "#0a1533",
+  "background_color": "#060a13",
+  "theme_color": "#060a13",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
