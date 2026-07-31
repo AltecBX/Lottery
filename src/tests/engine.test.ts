@@ -489,6 +489,62 @@ describe('jackpot, winner location and sales', () => {
     expect(back.draws.find((d) => d.date === '2026-07-29')!.winnerLocation).toBeUndefined()
   })
 
+  it("reads the Louisiana Lottery CSV layout: pb_ball is the bonus, multiplier and cash value are not numbers", () => {
+    // Exact header/row shape from https://louisianalottery.com/csv/powerball.csv
+    const text = [
+      'pb_drawing_date,pb_number_1,pb_number_2,pb_number_3,pb_number_4,pb_number_5,pb_ball,pb_jackpot,pb_jackpot_win_loc,pb_multi,pb_cash_value',
+      '2026-07-29,30,36,40,42,57,2,667700000,,2,292500000',
+      '2026-07-27,6,26,46,58,65,25,637800000,,2,279300000',
+      '2015-03-25,7,19,23,50,54,14,40000000,"New Jersey",2,26845638',
+      // the file appends a second table whose rows have no date — must be ignored
+      ',,,,,,,,,,',
+      ',4082,2025-09-08,20000000,9200000,6,,,,,',
+    ].join('\n')
+    const out = parseDelimitedText(text)
+    expect(out.errors).toEqual([])
+    expect(out.drawSize).toBe(5)
+    expect(out.hasSpecial).toBe(true)
+    expect(out.draws).toHaveLength(3)
+    const newest = out.draws[out.draws.length - 1]
+    // the multiplier (2) must NOT have been absorbed as a sixth main number
+    expect(newest.sorted).toEqual([30, 36, 40, 42, 57])
+    expect(newest.special).toBe(2)
+    expect(newest.jackpot).toBe(667_700_000)
+    const won = out.draws.find((d) => d.date === '2015-03-25')!
+    expect(won.winnerLocation).toBe('New Jersey')
+    expect(won.special).toBe(14)
+  })
+
+  it('reads the Mega Millions CSV layout, where the multiplier sits before the jackpot', () => {
+    const text = [
+      'mm_drawing_date,mm_number_1,mm_number_2,mm_number_3,mm_number_4,mm_number_5,mm_ball,mm_multi,mm_jackpot,mm_jackpot_win_loc,mm_cash_value',
+      '2026-07-28,34,48,49,59,70,12,,800000000,Florida,344200000',
+      '2026-07-24,2,5,42,44,60,1,,743000000,,323400000',
+    ].join('\n')
+    const out = parseDelimitedText(text)
+    expect(out.errors).toEqual([])
+    expect(out.drawSize).toBe(5)
+    expect(out.hasSpecial).toBe(true)
+    const first = out.draws.find((d) => d.date === '2026-07-28')!
+    expect(first.sorted).toEqual([34, 48, 49, 59, 70])
+    expect(first.special).toBe(12)
+    expect(first.jackpot).toBe(800_000_000)
+    expect(first.winnerLocation).toBe('Florida')
+  })
+
+  it('appending a jackpot CSV enriches draws already synced from the results API', () => {
+    const synced = [{ ...D('2026-07-29', [30, 36, 40, 42, 57]), special: 2 }]
+    const fromCsv = parseDelimitedText([
+      'pb_drawing_date,pb_number_1,pb_number_2,pb_number_3,pb_number_4,pb_number_5,pb_ball,pb_jackpot,pb_jackpot_win_loc,pb_multi,pb_cash_value',
+      '2026-07-29,30,36,40,42,57,2,667700000,"Lake Charles, LA",2,292500000',
+    ].join('\n')).draws
+    const { merged, added } = mergeDraws(synced, fromCsv)
+    expect(added).toBe(0)
+    expect(merged).toHaveLength(1)
+    expect(merged[0].jackpot).toBe(667_700_000)
+    expect(merged[0].winnerLocation).toBe('Lake Charles, LA')
+  })
+
   it('sales rows map to a date lookup and attach only where dates line up', () => {
     const sales = parseSalesRows([
       { bus_day: '2026-07-29T00:00:00.000', total: '2299478' },

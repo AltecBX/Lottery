@@ -1,5 +1,5 @@
 import type { Draw } from './types.ts'
-import type { ParseOutcome } from './parse.ts'
+import { parseDelimitedText, type ParseOutcome } from './parse.ts'
 import { dowOf } from './dates.ts'
 
 /**
@@ -79,6 +79,32 @@ export async function fetchOfficialResults(key: SyncKey): Promise<ParseOutcome> 
   if (!resp.ok) throw new Error(`${source.label} source responded ${resp.status}`)
   const rows = (await resp.json()) as SocrataRow[]
   return parseSocrataRows(rows, key)
+}
+
+/**
+ * Louisiana Lottery's public CSV exports. These carry more per draw than the
+ * results API: the advertised jackpot, the cash value, and where a winning
+ * ticket was sold — plus Powerball history back to 1995.
+ *
+ * The site sends no `Access-Control-Allow-Origin` header, so a browser cannot
+ * read it cross-origin; `fetchCsvSource` still tries (it works when the app is
+ * run locally or if the header is ever added) and otherwise the file downloads
+ * and drops straight into the importer, which understands this exact layout.
+ */
+export const CSV_SOURCES = [
+  { key: 'powerball' as const, label: 'Powerball', url: 'https://louisianalottery.com/csv/powerball.csv' },
+  { key: 'megamillions' as const, label: 'Mega Millions', url: 'https://louisianalottery.com/csv/mega-millions.csv' },
+]
+
+export function csvSourceUrl(key: SyncKey): string {
+  return CSV_SOURCES.find((s) => s.key === key)!.url
+}
+
+export async function fetchCsvSource(key: SyncKey): Promise<ParseOutcome> {
+  const source = CSV_SOURCES.find((s) => s.key === key)!
+  const resp = await fetch(source.url, { headers: { Accept: 'text/csv' } })
+  if (!resp.ok) throw new Error(`${source.label} CSV responded ${resp.status}`)
+  return parseDelimitedText(await resp.text())
 }
 
 /**

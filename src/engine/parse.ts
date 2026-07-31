@@ -93,9 +93,18 @@ interface PendingRow {
   winnerLocation?: string
 }
 
-const BONUS_HEADER = /p(ower)?[\s_-]?ball|pball|bonus|mega[\s_-]?ball|extra|star|lucky|\bpb\b|\bsb\b/i
-const JACKPOT_HEADER = /jackpot|annuity|cash\s*value|grand\s*prize|top\s*prize|\bprize\b|advertised/i
-const LOCATION_HEADER = /winner|location|won\s*(in|at)|city|state|retailer|store/i
+// `ball$` catches feed-style headers such as `pb_ball` / `mm_ball`, where the
+// underscore blocks a word boundary before "ball".
+const BONUS_HEADER = /p(ower)?[\s_-]?ball|pball|bonus|mega[\s_-]?ball|extra|star|lucky|\bpb\b|\bsb\b|ball\s*$/i
+/**
+ * Columns that are numeric but are NOT drawn balls — a Power Play/Megaplier
+ * multiplier is a small integer that would otherwise be counted as a number and
+ * throw off draw-size detection. Cash value is a second money column.
+ */
+const IGNORE_HEADER = /multiplier|multi(plier)?[\s_-]*$|[\s_-]multi\b|^multi\b|power[\s_-]*play|megaplier|cash[\s_-]*value/i
+const JACKPOT_HEADER = /jackpot|annuity|grand[\s_-]*prize|top[\s_-]*prize|\bprize\b|advertised/i
+/** Checked before jackpot, so a column like "jackpot_win_loc" reads as a place. */
+const LOCATION_HEADER = /winner|location|win[\s_-]*loc|won[\s_-]*(in|at|by)?\b|\bloc\b|city|\bstate\b|retailer|store/i
 
 /**
  * Read a money cell: "$1,020,000,000", "1.02B", "245M", "1020000000".
@@ -133,17 +142,19 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto
   // values could swallow a real number column and corrupt the draw size.
   let jackpotIdx = -1
   let locationIdx = -1
+  const ignoreIdx = new Set<number>()
   if (isHeaderRow(rows[0])) {
     const header = rows[0]
     for (let i = 0; i < header.length; i++) {
       const cell = String(header[i]).trim()
       if (cell === '') continue
-      if (jackpotIdx < 0 && JACKPOT_HEADER.test(cell)) jackpotIdx = i
+      if (IGNORE_HEADER.test(cell)) ignoreIdx.add(i)
       else if (locationIdx < 0 && LOCATION_HEADER.test(cell) && !BONUS_HEADER.test(cell)) locationIdx = i
+      else if (jackpotIdx < 0 && JACKPOT_HEADER.test(cell)) jackpotIdx = i
     }
     for (let i = header.length - 1; i >= 0; i--) {
       const cell = String(header[i]).trim()
-      if (cell === '' || i === jackpotIdx || i === locationIdx) continue
+      if (cell === '' || i === jackpotIdx || i === locationIdx || ignoreIdx.has(i)) continue
       bonusHeaderHit = BONUS_HEADER.test(cell)
       break
     }
@@ -151,7 +162,7 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto
   }
   // Lift those columns out so the numeric scan below never sees them
   const extras: { jackpot?: number; winnerLocation?: string }[] = []
-  if (jackpotIdx >= 0 || locationIdx >= 0) {
+  if (jackpotIdx >= 0 || locationIdx >= 0 || ignoreIdx.size > 0) {
     rows = rows.map((r) => {
       const copy = [...r]
       const extra: { jackpot?: number; winnerLocation?: string } = {}
@@ -165,6 +176,7 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto
         if (loc !== '' && !/^(n\/?a|none|-{1,2})$/i.test(loc)) extra.winnerLocation = loc
         copy[locationIdx] = ''
       }
+      for (const i of ignoreIdx) copy[i] = ''
       extras.push(extra)
       return copy
     })
@@ -198,6 +210,9 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto
   let dowMismatches = 0
   rows.forEach((cells, idx) => {
     const line = idx + 1
+    // Some official exports append a second table after the draw rows; those
+    // trailing records have no date in the first cell, so skip them quietly.
+    if (String(cells[0] ?? '').trim() === '') return
     const date = parseDateToken(cells[0] ?? '', dayFirst)
     if (!date) {
       errors.push(`Row ${line}: could not read "${String(cells[0] ?? '')}" as a date.`)
