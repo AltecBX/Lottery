@@ -3,13 +3,14 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Pattern Lab — a statistical analysis & prediction laboratory for 5-number draw histories",
+  "description": "Pattern Lab \u2014 a statistical analysis & prediction laboratory for 5-number draw histories",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "jackpots": "node --experimental-strip-types scripts/fetch-jackpots.mjs"
+    "jackpots": "node --experimental-strip-types scripts/fetch-jackpots.mjs",
+    "history": "node --experimental-strip-types scripts/fetch-history.mjs"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.3.0",

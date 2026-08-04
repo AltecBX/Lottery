@@ -14,6 +14,8 @@ import { buildLedger, gradeTicket } from '../engine/ticket.ts'
 import { buildPortfolio, lowerTierValue, scorePortfolio } from '../engine/portfolio.ts'
 import { flipUnits } from '../components/FlipClock.tsx'
 import { resolveNextDraw } from '../components/NextDraw.tsx'
+import { decodeHistory, encodeHistory, historyUrl } from '../engine/history.ts'
+import { dowOf } from '../engine/dates.ts'
 import { countdownTo } from '../engine/drawtime.ts'
 import type { Draw } from '../engine/types.ts'
 
@@ -259,5 +261,53 @@ describe('flip clock units', () => {
   it('clamps to zero once the draw has passed', () => {
     const past = flipUnits(at(-5000))
     expect(past.every((u) => u.value === 0)).toBe(true)
+  })
+})
+
+describe('merged draw history', () => {
+  const draws = [
+    { date: '1995-03-08', dow: 3, numbers: [16, 30, 44, 5, 12], sorted: [5, 12, 16, 30, 44], special: 25, jackpot: 5_000_000, winnerLocation: 'IA' },
+    { date: '2026-08-01', dow: 6, numbers: [3, 16, 36, 50, 61], sorted: [3, 16, 36, 50, 61], special: 19 },
+  ]
+
+  it('survives a round trip, keeping every optional field', () => {
+    const file = encodeHistory('powerball', draws, ['a', 'b'])
+    expect(file).toMatchObject({ game: 'powerball', count: 2, first: '1995-03-08', last: '2026-08-01' })
+    const back = decodeHistory(file)
+    expect(back).toHaveLength(2)
+    expect(back[0]).toMatchObject({
+      date: '1995-03-08', sorted: [5, 12, 16, 30, 44], special: 25, jackpot: 5_000_000, winnerLocation: 'IA',
+    })
+    // absent extras must not come back as zeroes
+    expect(back[1].jackpot).toBeUndefined()
+    expect(back[1].winnerLocation).toBeUndefined()
+    expect(back[1].special).toBe(19)
+  })
+
+  it('recomputes the weekday rather than trusting the file', () => {
+    const file = encodeHistory('powerball', draws, [])
+    expect(decodeHistory(file)[1].dow).toBe(dowOf('2026-08-01'))
+  })
+
+  it('drops malformed rows instead of poisoning the history', () => {
+    const file = encodeHistory('powerball', draws, [])
+    file.rows.push(['not-a-date', 1, 2, 3, 4, 5, 6, 0, ''])
+    file.rows.push(['2026-08-05', 1, 2] as never)
+    file.rows.push(['2026-08-06', 0, -3, 4, 5, 6, 7, 0, ''])
+    expect(decodeHistory(file)).toHaveLength(2)
+    expect(decodeHistory(null)).toEqual([])
+  })
+
+  it('sorts by date however the rows arrive', () => {
+    const file = encodeHistory('powerball', draws, [])
+    file.rows.reverse()
+    expect(decodeHistory(file).map((d) => d.date)).toEqual(['1995-03-08', '2026-08-01'])
+  })
+
+  it('asks for the history next to the page, not at the site root', () => {
+    expect(historyUrl('https://altecbx.github.io/Lottery/', 'powerball', 7))
+      .toBe('https://altecbx.github.io/Lottery/history-powerball.json?t=7')
+    expect(historyUrl('https://altecbx.github.io/Lottery/index.html', 'megamillions', 7))
+      .toBe('https://altecbx.github.io/Lottery/history-megamillions.json?t=7')
   })
 })
