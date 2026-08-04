@@ -532,9 +532,14 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
 
   const usableRules = rules.filter((r) => r.usable)
   const best = [...usableRules].sort((a, b) => b.edgeZ - a.edgeZ)[0]
-  const verdict = best
-    ? `Strongest usable rule keeps winners ${best.edgeZ.toFixed(1)} standard errors above its own space share (${best.label}, ${(best.spaceShare * 100).toFixed(1)}% of the space kept, ${(best.survival * 100).toFixed(2)}% of unseen winners kept).`
-    : 'No constraint retained winners better than it retained candidates. Every shape filter removed winners at the rate it removed the space — which is precisely what a fair machine produces, and means none of them reduce the search space for free.'
+  // Reporting the strongest rule's z-score without saying whether it cleared the
+  // bar reads as a finding whichever way it fell. Below 2σ it is noise, and the
+  // verdict has to say so in the same breath as the number.
+  const verdict = !best
+    ? 'No constraint retained winners better than it retained candidates. Every shape filter removed winners at the rate it removed the space — which is precisely what a fair machine produces, and means none of them reduce the search space for free.'
+    : best.provenEdge
+      ? `Strongest rule keeps winners ${best.edgeZ.toFixed(1)} standard errors above its own space share (${best.label}, ${(best.spaceShare * 100).toFixed(1)}% of the space kept, ${(best.survival * 100).toFixed(2)}% of unseen winners kept).`
+      : `Nothing beat the fair line. The strongest of ${usableRules.length} usable rules (${best.label}) reached only ${best.edgeZ.toFixed(1)}σ above its own space share, which is inside what a fair machine produces by chance — so every one of them removes winners at the rate it removes candidates.`
 
   rules.sort((a, b) => Number(b.usable) - Number(a.usable) || b.edgeZ - a.edgeZ)
 
@@ -642,10 +647,20 @@ function evaluateSet(
   return { survival: n > 0 ? hits / n : 1, spaceShare: kept / sampleSize, failedSteps, n }
 }
 
+/*
+ * Winner-retention floors the optimiser works to.
+ *
+ * Deliberately not 99.9%: the identity caps reduction at whatever you decline
+ * to retain, so a 99.9% floor permits removing 0.1% of the space — and with 634
+ * held-out draws a single missed winner is already 0.16%, so the target sits
+ * below the resolution of the record it is measured on. Every rule failed it
+ * and the mode removed nothing. These floors are coarse enough for this much
+ * history to express and still leave the ladder meaningful.
+ */
 const MODE_TARGETS: { key: ConstraintMode['key']; label: string; target: number }[] = [
-  { key: 'conservative', label: 'Conservative', target: 0.999 },
-  { key: 'balanced', label: 'Balanced', target: 0.995 },
-  { key: 'aggressive', label: 'Aggressive', target: 0.98 },
+  { key: 'conservative', label: 'Conservative', target: 0.99 },
+  { key: 'balanced', label: 'Balanced', target: 0.97 },
+  { key: 'aggressive', label: 'Aggressive', target: 0.94 },
 ]
 
 /**

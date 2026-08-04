@@ -42,6 +42,14 @@ export type RuleTier =
   /** Measured no better than its own mathematical baseline — not used */
   | 'unsupported'
 
+/**
+ * Total smoothing mass spread across a feature's bins, in units of draws.
+ *
+ * Fixed in total rather than per bin: one phantom draw shared out keeps every
+ * reachable value non-zero without letting the number of bins decide the tails.
+ */
+const PRIOR_MASS = 1
+
 export type FeatureGroup = 'position' | 'gap' | 'sum' | 'shape' | 'conditional'
 
 export interface FeatureSpec {
@@ -291,9 +299,15 @@ export class ConstraintState {
   /**
    * Two-sided interval covering at least (1 − 2·alpha) of observed values.
    *
-   * Jeffreys smoothing (half a count in every reachable bin) keeps a value that
-   * has never been observed from receiving probability zero, which is what stops
-   * "never happened" turning into "cannot happen".
+   * Smoothing keeps a value that has never been observed from receiving
+   * probability zero, which is what stops "never happened" turning into "cannot
+   * happen". But the prior has to stay small enough to let the data speak: half
+   * a count in every bin is harmless for a 69-bin position and ruinous for the
+   * 321-bin total, where it adds 160 phantom draws and decides the tails by
+   * itself — a 99.6% band on the Powerball total came out as 21–330 when the
+   * real one is nearer 70–290, wide enough to permit combinations the game has
+   * never produced. Spreading a fixed mass across the bins instead keeps every
+   * value non-zero while leaving the tails to the observations.
    */
   interval(i: number, alpha: number): { lo: number; hi: number } {
     const spec = this.specs[i]
@@ -301,7 +315,7 @@ export class ConstraintState {
     const off = this.offset[i]
     const total = this.seen[i]
     if (total === 0) return { lo: spec.hardMin, hi: spec.hardMax }
-    const prior = 0.5
+    const prior = PRIOR_MASS / bins.length
     const reachable = bins.length
     const grand = total + prior * reachable
     const wantLo = alpha * grand
@@ -339,8 +353,8 @@ export class ConstraintState {
     }
     if (total === 0) return
 
-    const prior = 0.5
-    const grand = total + prior * bins.length
+    const prior = PRIOR_MASS / bins.length
+    const grand = total + PRIOR_MASS
     const doneLo = new Array<boolean>(alphas.length).fill(false)
     const doneHi = new Array<boolean>(alphas.length).fill(false)
     let acc = 0
@@ -360,13 +374,14 @@ export class ConstraintState {
     }
   }
 
-  /** Observed count of an exact value, and its Jeffreys-smoothed probability. */
+  /** Observed count of an exact value, and its smoothed probability. */
   at(i: number, value: number): { count: number; p: number } {
     const bins = this.bins[i]
     const b = Math.round(value) + this.offset[i]
     const count = b >= 0 && b < bins.length ? bins[b] : 0
-    const grand = this.seen[i] + 0.5 * bins.length
-    return { count, p: (count + 0.5) / Math.max(1e-9, grand) }
+    const prior = PRIOR_MASS / bins.length
+    const grand = this.seen[i] + PRIOR_MASS
+    return { count, p: (count + prior) / Math.max(1e-9, grand) }
   }
 
   /** Observed min and max — reported, never used as a hard cutoff. */

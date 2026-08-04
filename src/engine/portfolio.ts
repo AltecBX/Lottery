@@ -50,29 +50,123 @@ export interface PortfolioResult {
 }
 
 /**
- * Choose the numbers for one ticket, discounting each number's score once for
- * every earlier ticket that already used it.
+ * The shape a real draw of this game has: the range each sorted position keeps
+ * to, and the range the total lands in.
  *
- * The discount is multiplicative, so the two ends of the slider are exact
- * rather than approximate: at `spread` 0 nothing is discounted and every ticket
- * rebuilds the same top pick, while at 1 a used number keeps a millionth of its
- * score and is never taken again until the pool runs out. Raw score breaks ties
- * so the choice stays sensible even then.
+ * Taking the top D numbers by score alone ignores all of this, and the result is
+ * not a near miss — on a live Powerball model it produced 2-4-5-6-9, a total of
+ * 26 when no draw in the current era has ever totalled under 52. The numbers
+ * were individually the best-scoring ones; as a combination they were a shape
+ * the game has never once produced.
+ */
+export interface PortfolioShape {
+  /** Lowest value each sorted position stays at or above */
+  lo: number[]
+  /** Highest value each sorted position stays at or below */
+  hi: number[]
+  sumLo: number
+  sumHi: number
+}
+
+const inShape = (sorted: number[], shape: PortfolioShape): boolean => {
+  let total = 0
+  for (let i = 0; i < sorted.length; i++) {
+    if (sorted[i] < shape.lo[i] || sorted[i] > shape.hi[i]) return false
+    total += sorted[i]
+  }
+  return total >= shape.sumLo && total <= shape.sumHi
+}
+
+/** Draw `want` distinct numbers from `pool`, each one's chance rising with its weight. */
+function weightedSubset(
+  weights: Float64Array, pool: number[], want: number, rnd: () => number, out: number[],
+): void {
+  out.length = 0
+  if (want <= 0) return
+  let remaining = 0
+  for (const n of pool) remaining += weights[n]
+  const taken = new Set<number>()
+  for (let d = 0; d < want; d++) {
+    let r = rnd() * remaining
+    let chosen = -1
+    for (const n of pool) {
+      if (taken.has(n)) continue
+      r -= weights[n]
+      if (r <= 0) { chosen = n; break }
+    }
+    if (chosen < 0) {
+      for (let i = pool.length - 1; i >= 0; i--) if (!taken.has(pool[i])) { chosen = pool[i]; break }
+    }
+    if (chosen < 0) break
+    taken.add(chosen)
+    out.push(chosen)
+    remaining -= weights[chosen]
+  }
+}
+
+/** How many candidate combinations each ticket is chosen from. */
+const TICKET_TRIES = 1200
+
+/**
+ * Choose one ticket: the best-scoring combination that both looks like a draw
+ * of this game and introduces exactly `fresh` numbers no earlier ticket used.
+ *
+ * Taking the top D by score and calling it a ticket is what produced 2-4-5-6-9,
+ * so shape is a condition of the search rather than a tie-break. It stays a
+ * preference, not a wall: if nothing sampled lands inside the bands the
+ * best-scoring combination is taken anyway. Nothing here is called impossible,
+ * and none of it changes any ticket's odds — it decides which combinations get
+ * suggested, not what they are worth.
  */
 function pickTicket(
-  scores: Float64Array, K: number, D: number, used: Int32Array, spread: number,
+  scores: Float64Array, K: number, D: number, used: Int32Array,
+  fresh: number, shape: PortfolioShape | null, rnd: () => number,
 ): number[] {
-  const keep = Math.max(1e-6, 1 - spread)
-  const order: number[] = []
-  for (let i = 1; i <= K; i++) order.push(i)
-  order.sort((a, b) => {
-    const sa = scores[a] * Math.pow(keep, used[a])
-    const sb = scores[b] * Math.pow(keep, used[b])
-    return sb - sa || scores[b] - scores[a] || a - b
-  })
-  const picked = order.slice(0, D)
-  for (const n of picked) used[n]++
-  return picked.sort((a, b) => a - b)
+  let hi = -Infinity
+  let lo = Infinity
+  for (let n = 1; n <= K; n++) {
+    if (scores[n] > hi) hi = scores[n]
+    if (scores[n] < lo) lo = scores[n]
+  }
+  const range = Math.max(1e-9, hi - lo)
+  const weights = new Float64Array(K + 1)
+  for (let n = 1; n <= K; n++) weights[n] = Math.exp((scores[n] - lo) / (range * 0.35))
+
+  const unusedPool: number[] = []
+  const usedPool: number[] = []
+  for (let n = 1; n <= K; n++) (used[n] === 0 ? unusedPool : usedPool).push(n)
+  // Honour the split only as far as the pools allow.
+  const wantFresh = Math.max(0, Math.min(D, Math.min(fresh, unusedPool.length)))
+  const wantRepeat = Math.min(D - wantFresh, usedPool.length)
+  const topUp = D - wantFresh - wantRepeat
+
+  const byValue = (a: number, b: number) => scores[b] - scores[a] || a - b
+  const greedy = [
+    ...unusedPool.slice().sort(byValue).slice(0, wantFresh + topUp),
+    ...usedPool.slice().sort(byValue).slice(0, wantRepeat),
+  ].sort((a, b) => a - b)
+  let best = greedy
+  let bestValue = !shape || inShape(greedy, shape) ? greedy.reduce((s, n) => s + scores[n], 0) : -Infinity
+
+  if (shape) {
+    const cand: number[] = []
+    const partA: number[] = []
+    const partB: number[] = []
+    for (let t = 0; t < TICKET_TRIES; t++) {
+      weightedSubset(weights, unusedPool, wantFresh + topUp, rnd, partA)
+      weightedSubset(weights, usedPool, wantRepeat, rnd, partB)
+      cand.length = 0
+      cand.push(...partA, ...partB)
+      cand.sort((a, b) => a - b)
+      if (!inShape(cand, shape)) continue
+      let v = 0
+      for (const n of cand) v += scores[n]
+      if (v > bestValue) { bestValue = v; best = cand.slice() }
+    }
+  }
+
+  for (const n of best) used[n]++
+  return best
 }
 
 /** Uniformly sample D distinct numbers from 1..K (partial Fisher–Yates). */
@@ -179,6 +273,8 @@ export interface PortfolioOptions {
   count: number
   /** 0 = every ticket is the same top pick, 1 = cover as many numbers as possible */
   spread: number
+  /** Keep suggested tickets to shapes this game actually produces */
+  shape?: PortfolioShape | null
   trials?: number
   seed?: number
   tiers?: PrizeTier[]
@@ -215,10 +311,31 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
     if (!seenSpecial.has(s)) { seenSpecial.add(s); specialOrder.push(s) }
   }
 
+  const shape = opts.shape ?? null
+
+  /*
+   * The slider sets how many different numbers the whole set covers, from D
+   * (every ticket identical) up to count·D (no number twice). Naming the target
+   * outright is what makes the control responsive: the previous version scored
+   * a reuse penalty against the model's own numbers, and because the gap
+   * between the best number and the twenty-fifth best is tiny next to the gap
+   * across the whole pool, every setting above about 0.1 priced reuse out
+   * entirely and returned byte-for-byte identical tickets for nine-tenths of
+   * the slider's travel. Here each notch changes the answer.
+   */
+  const maxDistinct = Math.min(K, count * D)
+  const targetDistinct = Math.round(D + spread * (maxDistinct - D))
+  const budget = targetDistinct - D
+
   const used = new Int32Array(K + 1)
   const tickets: PortfolioTicket[] = []
   for (let t = 0; t < count; t++) {
-    const numbers = pickTicket(scores, K, D, used, spread)
+    // Spread the new numbers evenly over the tickets after the first, which
+    // gets a full set of its own.
+    const fresh = t === 0
+      ? D
+      : Math.round((budget * t) / (count - 1)) - Math.round((budget * (t - 1)) / (count - 1))
+    const numbers = pickTicket(scores, K, D, used, fresh, shape, mulberry32(seed + t * 7919))
     const ticket: PortfolioTicket = { numbers }
     if (specialK > 0) {
       // At zero spread every ticket is one pick repeated, bonus ball included
@@ -229,7 +346,7 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
 
   // Same count, every ticket identical to the model's single best pick
   const topUsed = new Int32Array(K + 1)
-  const top = pickTicket(scores, K, D, topUsed, 0)
+  const top = pickTicket(scores, K, D, topUsed, D, shape, mulberry32(seed))
   const concentrated: PortfolioTicket[] = Array.from({ length: count }, () => {
     const t: PortfolioTicket = { numbers: top }
     if (specialK > 0) t.special = specialPicks[0] ?? 1

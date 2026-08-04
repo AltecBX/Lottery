@@ -7,6 +7,7 @@ import { computeSpecialRawSignals, similarityScores, SIGNAL_LABEL, zNormalize } 
 import { analyzeRepeats } from './repeats.ts'
 import { analyzePositions, positionalFit } from './positions.ts'
 import { analyzeConstraints } from './constraintlab.ts'
+import { detectEra } from './era.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
   topFollowers, topPairs, trends, weekdaySignificance, windowCounts,
@@ -55,8 +56,27 @@ export function inferNextDate(draws: Draw[], schedule: number[]): string {
   return addDays(last, 1)
 }
 
-export function runEngine(draws: Draw[], settings: Settings): EngineResult {
+export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
   const started = performance.now()
+
+  /*
+   * The game's rules are a property of the game, not of the window being
+   * analysed. Powerball's bonus pool ran 45 balls in 1997 before shrinking to
+   * 26, and Mega Millions' mains went 75 down to 70 — so sizing the pool by the
+   * largest number ever drawn prices a machine that no longer exists. With the
+   * full history loaded that alone turns Powerball's 1-in-292M into 1-in-506M
+   * and drags every expected-value figure down with it.
+   *
+   * So the pools always come from the current era, whichever draws the user has
+   * chosen to analyse. A pool that only grew leaves every old draw legal and
+   * changes nothing; one that shrank leaves old draws containing numbers the
+   * game can no longer produce, and those cannot be modelled against today's
+   * pool at all — so the mains are scoped to the current era when that happens.
+   */
+  const eraInfo = detectEra(allDraws)
+  const mainsShrank = !!eraInfo && eraInfo.earlyMax > eraInfo.currentMax
+  const draws = mainsShrank ? allDraws.slice(eraInfo!.cutoffIndex) : allDraws
+
   if (draws.length < MIN_DRAWS) {
     return emptyResult(
       draws.length === 0
@@ -95,8 +115,15 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
   if (withSpecial.length >= draws.length * 0.9 && withSpecial.length >= MIN_DRAWS) {
     let maxS = 0
     for (const d of withSpecial) maxS = Math.max(maxS, d.special!)
-    specialKs = settings.specialMax > 0 ? settings.specialMax : maxS
-    if (specialKs > 99 || maxS > specialKs) specialKs = 0
+    // Today's bonus pool, not the largest ball this history has ever seen. The
+    // backtest already skips draws whose bonus ball is outside the pool, so a
+    // retired 45-ball era simply contributes nothing here rather than inflating
+    // the odds by 73%.
+    const currentS = eraInfo && eraInfo.currentSpecialMax > 0 && eraInfo.earlySpecialMax > eraInfo.currentSpecialMax
+      ? eraInfo.currentSpecialMax
+      : maxS
+    specialKs = settings.specialMax > 0 ? settings.specialMax : currentS
+    if (specialKs > 99 || currentS > specialKs) specialKs = 0
     if (specialKs > 0 && specialKs < 2) specialKs = 0
   }
 
