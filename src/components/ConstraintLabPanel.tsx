@@ -166,8 +166,9 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
         sub="How far the candidate space can be cut while keeping winners it has never seen."
       >
         <p className="hint" style={{ display: 'block' }}>
-          Needs about 160 draws before any rule can be built from the past and tested against the future. Sync the full
-          history to switch this on.
+          Needs about 160 draws from the game's <em>current</em> rule era before any rule can be built from the past and
+          tested against the future. Draws from a retired number pool do not count towards that, however many of them
+          there are: a range fitted across a pool change describes a machine that no longer exists.
         </p>
       </SectionCard>
     )
@@ -316,7 +317,10 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
 
       {mode.eliminated.length > 0 && (
         <>
-          <div className="mini-title" style={{ marginTop: 18 }}>Winners this setting would have thrown away</div>
+          <div className="mini-title" style={{ marginTop: 18 }}>
+            Winners this setting would have thrown away
+            {' '}({big(Math.round((1 - mode.survival) * lab.evaluated))} of {big(lab.evaluated)})
+          </div>
           <div className="cl-elim">
             {mode.eliminated.slice(0, 8).map((e) => (
               <div className="cl-elim-row" key={e.date}>
