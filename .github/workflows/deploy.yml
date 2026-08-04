@@ -40,6 +40,11 @@ jobs:
       - name: Refresh advertised jackpots
         run: npm run jackpots
         continue-on-error: true
+      # Merges every public source into one history per game — reaches back to
+      # 1995 for Powerball, which no single CORS-readable source does.
+      - name: Rebuild merged draw histories
+        run: npm run history
+        continue-on-error: true
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

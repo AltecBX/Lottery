@@ -1,5 +1,6 @@
 import type { Draw } from './types.ts'
 import { parseDelimitedText, type ParseOutcome } from './parse.ts'
+import { decodeHistory, fetchPublishedHistory } from './history.ts'
 import { dowOf } from './dates.ts'
 
 /**
@@ -73,7 +74,32 @@ export function parseSocrataRows(rows: SocrataRow[], key: SyncKey): ParseOutcome
   }
 }
 
+/**
+ * The deepest history available for a game.
+ *
+ * Prefers the merged file published alongside the app, which is the union of
+ * every public source and reaches back to 1995 for Powerball and 2002 for Mega
+ * Millions. The live New York API is the fallback: always current, but it only
+ * begins in 2010 for Powerball.
+ */
 export async function fetchOfficialResults(key: SyncKey): Promise<ParseOutcome> {
+  const published = await fetchPublishedHistory(key)
+  if (published) {
+    const draws = decodeHistory(published)
+    if (draws.length > 0) {
+      return {
+        draws,
+        errors: [],
+        warnings: [
+          `${draws.length.toLocaleString()} draws from ${draws[0].date} — every public source merged, with jackpots and winner locations where they exist.`,
+          'This reaches back through older rule eras. Settings › "Which draws to analyze" chooses whether the model reads all of it or only the current rules.',
+        ],
+        drawSize: draws[0].sorted.length,
+        hasSpecial: draws.some((d) => d.special !== undefined),
+      }
+    }
+  }
+
   const source = SYNC_SOURCES.find((s) => s.key === key)!
   const resp = await fetch(source.url, { headers: { Accept: 'application/json' } })
   if (!resp.ok) throw new Error(`${source.label} source responded ${resp.status}`)

@@ -77,7 +77,7 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  if (url.pathname.endsWith('/jackpots.json')) {
+  if (url.pathname.endsWith('/jackpots.json') || /\/history-[a-z]+\.json$/.test(url.pathname)) {
     event.respondWith(freshFirst(request, SHELL).catch(() => Response.error()))
     return
   }
