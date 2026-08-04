@@ -810,13 +810,32 @@ describe('era detection', () => {
     expect(drawsForEra(draws, 'current', null)).toHaveLength(900)
   })
 
-  it('shrinks the detected pools to the current rules, which is what fixes the odds', () => {
+  it('prices the game by today\'s pools whichever era is analysed', () => {
+    // Sizing the bonus pool by the largest ball ever drawn is what put 1-in-506M
+    // on screen for a game whose real odds are 1-in-292M: Powerball ran 45 bonus
+    // balls in 1997, and loading the full history handed that number straight to
+    // the odds. Which draws the model learns from is the user's choice; how many
+    // balls the machine has is not.
     const draws = withEraChange(900, 450, { main: 59, special: 35 }, { main: 69, special: 26 })
     const all = runEngine(draws, { ...DEFAULT_SETTINGS, era: 'all' })
     const current = runEngine(drawsForEra(draws, 'current', detectEra(draws)), DEFAULT_SETTINGS)
-    expect(all.special!.K).toBe(35)
+    expect(all.special!.K).toBe(26)
     expect(current.special!.K).toBe(26)
+    // Analysing everything still analyses everything — only the pool is pinned.
     expect(current.drawCount).toBeLessThan(all.drawCount)
+    expect(all.drawCount).toBe(900)
+  })
+
+  it('scopes the analysis itself when the main pool shrank', () => {
+    // Mega Millions went 75 mains down to 70. Those old draws contain numbers
+    // the game can no longer produce, so unlike a pool that only grew they
+    // cannot be modelled against today's pool at all.
+    const draws = withEraChange(900, 450, { main: 75, special: 25 }, { main: 70, special: 25 })
+    const res = runEngine(draws, { ...DEFAULT_SETTINGS, era: 'all' })
+    expect(res.ok).toBe(true)
+    expect(res.K).toBe(70)
+    expect(res.drawCount).toBeLessThan(900)
+    expect(res.drawCount).toBeGreaterThanOrEqual(440)
   })
 })
 

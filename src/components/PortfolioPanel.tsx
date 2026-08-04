@@ -63,6 +63,26 @@ export function PortfolioPanel({ res, onSaveTicket }: {
 
   const specialPicks = useMemo(() => res.special?.picks.map((p) => p.number) ?? [], [res.special])
 
+  /*
+   * Keep suggested tickets to shapes this game actually produces. Ranking
+   * numbers one at a time says nothing about the combination they form, and the
+   * top five by score are perfectly capable of totalling 26 when no draw in the
+   * current era has ever totalled under 52. The bands come from Constraint Lab,
+   * which derives them walk-forward from the current rule era — so this is the
+   * model's own view of shape, not a rule invented here.
+   */
+  const shape = useMemo(() => {
+    const lab = res.constraintLab
+    if (!lab || lab.positionBands.length !== res.drawSize) return null
+    const sumRule = lab.rules.find((r) => r.featureKey === 'sum' && r.alpha === 0.002)
+    return {
+      lo: lab.positionBands.map((b) => b.lo),
+      hi: lab.positionBands.map((b) => b.hi),
+      sumLo: sumRule?.lo ?? 0,
+      sumHi: sumRule?.hi ?? Number.MAX_SAFE_INTEGER,
+    }
+  }, [res.constraintLab, res.drawSize])
+
   const portfolio = useMemo(
     () => buildPortfolio({
       scores,
@@ -72,9 +92,10 @@ export function PortfolioPanel({ res, onSaveTicket }: {
       specialPicks,
       count,
       spread,
+      shape,
       trials: 60000,
     }),
-    [scores, res.K, res.drawSize, res.special?.K, specialPicks, count, spread],
+    [scores, res.K, res.drawSize, res.special?.K, specialPicks, count, spread, shape],
   )
 
   const { stats, quickPick, concentrated } = portfolio
@@ -119,10 +140,14 @@ export function PortfolioPanel({ res, onSaveTicket }: {
           <input type="range" min={1} max={10} step={1} value={count} onChange={(e) => setCount(Number(e.target.value))} />
         </label>
         <label className="rng">
+          {/* Name the outcome, not the setting — the number moves at every notch. */}
           <span>
-            {spread < 0.2 ? 'Concentrated — repeat the best pick'
-              : spread > 0.8 ? 'Maximum spread — cover the most numbers'
-                : 'Balanced — strong numbers, spread out'}
+            {stats.distinctNumbers} different number{stats.distinctNumbers === 1 ? '' : 's'} covered
+            <span className="sub">
+              {spread < 0.2 ? ' · concentrated on the best pick'
+                : spread > 0.8 ? ' · the widest spread these tickets allow'
+                  : ' · strong numbers, spread out'}
+            </span>
           </span>
           <input type="range" min={0} max={1} step={0.05} value={spread} onChange={(e) => setSpread(Number(e.target.value))} />
         </label>

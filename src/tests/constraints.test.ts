@@ -12,7 +12,16 @@ import type { Draw } from '../engine/types.ts'
 const K = 69
 const D = 5
 
-/** A fair machine: every combination equally likely, no structure whatsoever. */
+/**
+ * A fair machine: every combination equally likely, no structure whatsoever.
+ *
+ * The bag is rebuilt for every draw, and that detail is the whole test. Carrying
+ * one shuffled bag across draws leaves each draw's numbers sitting in the first
+ * `size` slots when the next one starts, which correlates consecutive draws —
+ * repeats fell to 0.343 per draw against the fair 0.362. The engine duly found
+ * eleven rules beating their own space share, and it was right to: the data was
+ * not fair. A generator this test relies on has to be provably memoryless.
+ */
 function fairDraws(n: number, seed = 12345, pool = K, size = D): Draw[] {
   let a = seed >>> 0
   const rnd = () => {
@@ -22,9 +31,9 @@ function fairDraws(n: number, seed = 12345, pool = K, size = D): Draw[] {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
   const draws: Draw[] = []
-  const bag = new Int32Array(pool)
-  for (let i = 0; i < pool; i++) bag[i] = i + 1
   for (let i = 0; i < n; i++) {
+    const bag = new Int32Array(pool)
+    for (let b = 0; b < pool; b++) bag[b] = b + 1
     for (let j = 0; j < size; j++) {
       const k = j + Math.floor(rnd() * (pool - j))
       const t = bag[j]; bag[j] = bag[k]; bag[k] = t
@@ -262,6 +271,20 @@ describe('walk-forward constraint backtest', () => {
   })
 })
 
+describe('the fair generator really is fair', () => {
+  it('repeats numbers from the previous draw at exactly the chance rate', () => {
+    // D of K drawn twice independently share D²/K numbers on average — 25/69
+    // here. Serial correlation shows up in this number before anywhere else,
+    // and every claim in the suite below depends on there being none.
+    const draws = fairDraws(4000, 20260804)
+    let repeats = 0
+    for (let i = 1; i < draws.length; i++) {
+      for (const v of draws[i].sorted) if (draws[i - 1].sorted.includes(v)) repeats++
+    }
+    expect(repeats / (draws.length - 1)).toBeCloseTo((D * D) / K, 1)
+  })
+})
+
 describe('fair synthetic data must not manufacture an edge', () => {
   /**
    * The whole feature rests on one identity: for a uniform draw, the chance the
@@ -292,8 +315,11 @@ describe('fair synthetic data must not manufacture an edge', () => {
       // 2σ is the threshold the panel uses to call an edge real, so on fair
       // draws no mode may reach it in either direction.
       expect(Math.abs(mode.holdoutEdgeZ)).toBeLessThan(2)
-      // The headline pair has to obey the identity it is printed next to.
-      expect(Math.abs(mode.survival - mode.spaceShare)).toBeLessThan(0.015)
+      // The identity has to hold on the draws the optimiser never saw. Checking
+      // the full record instead would be measuring the greedy's own selection
+      // bias, which is real, expected, and reported separately below.
+      const seOut = Math.sqrt((mode.spaceShare * (1 - mode.spaceShare)) / Math.max(1, mode.holdoutDraws))
+      expect(Math.abs(mode.holdoutSurvival - mode.spaceShare)).toBeLessThan(3 * seOut + 0.005)
     }
   })
 

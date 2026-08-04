@@ -236,8 +236,15 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
         <Tile
           label="Beat the fair line by"
           value={`${mode.holdoutEdgeZ >= 0 ? '+' : ''}${mode.holdoutEdgeZ.toFixed(1)}σ`}
-          delta={mode.holdoutEdgeZ >= 2 ? 'real on held-out draws' : 'inside noise — cutting costs what it saves'}
-          deltaDir={mode.holdoutEdgeZ >= 2 ? 'up' : 'flat'}
+          /* Three settings are on screen at once, so the best of them clearing
+             2σ is roughly a one-in-twenty event on draws with no edge at all.
+             That is worth showing and not worth believing yet. */
+          delta={mode.holdoutEdgeZ >= 3
+            ? 'clears the fair line on draws it never saw'
+            : mode.holdoutEdgeZ >= 2
+              ? 'above the line, but it is the best of three settings — not established'
+              : 'inside noise — cutting costs what it saves'}
+          deltaDir={mode.holdoutEdgeZ >= 3 ? 'up' : 'flat'}
         />
       </div>
 
