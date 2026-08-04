@@ -6,6 +6,7 @@ import { buildCombos } from './combos.ts'
 import { computeSpecialRawSignals, similarityScores, SIGNAL_LABEL, zNormalize } from './signals.ts'
 import { analyzeRepeats } from './repeats.ts'
 import { analyzePositions, positionalFit } from './positions.ts'
+import { analyzeConstraints } from './constraintlab.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
   topFollowers, topPairs, trends, weekdaySignificance, windowCounts,
@@ -20,7 +21,7 @@ function emptyResult(message: string): EngineResult {
     ok: false, message, K: 0, drawSize: 0, drawCount: 0, firstDate: '', lastDate: '',
     scheduleDows: [], nextDate: '', nextDow: 0, inputSorted: true,
     predictions: [], topPick: [], top10: [], bestCombo: null, altCombos: [],
-    drivers: [], weightsLearned: false, special: null,
+    drivers: [], weightsLearned: false, special: null, constraintLab: null,
     repeats: null, bestComboIsNew: null, positionAnalysis: null, bestComboFit: null, weekdayTest: [],
     hot: [], cold: [], overdue: [], pairs: [], followers: [], dowProfiles: [],
     rising: [], falling: [], streaks: [], positions: [], similar: [],
@@ -119,6 +120,10 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
   const positionAnalysis = analyzePositions(draws, K, D, inputSorted)
   const combos = buildCombos(state, predictions, 8, positionAnalysis)
   const bestComboFit = combos.best ? positionalFit(positionAnalysis, combos.best.numbers) : null
+  // Constraint Lab — leak-free by construction: every rule is rebuilt from the
+  // draws before the one it is tested against. Independent of the prediction
+  // engine above, which it neither feeds nor depends on.
+  const constraintLab = analyzeConstraints(draws, K, D)
 
   const weightEntries = Object.entries(activeWeights).sort((a, b) => b[1] - a[1])
   const uniform = weightEntries.length > 0 ? 1 / weightEntries.length : 0
@@ -207,6 +212,7 @@ export function runEngine(draws: Draw[], settings: Settings): EngineResult {
     bestComboIsNew,
     positionAnalysis,
     bestComboFit,
+    constraintLab,
     hot,
     cold,
     overdue: overdueList(state),

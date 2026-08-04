@@ -305,6 +305,8 @@ export interface EngineResult {
   positionAnalysis: import('./positions.ts').PositionAnalysis | null
   /** How the best combination's column shape compares to that history */
   bestComboFit: import('./positions.ts').PositionalFit | null
+  /** Constraint Lab: walk-forward search-space reduction, null when history is too short */
+  constraintLab: import('./constraintlab.ts').ConstraintLab | null
 
   hot: HotColdEntry[]
   cold: HotColdEntry[]
