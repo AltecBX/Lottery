@@ -1,0 +1,377 @@
+import { describe, expect, it } from 'vitest'
+import {
+  ConstraintState, contextAt, EMPTY_CONTEXT, extractFeatures, featureCount, featureSpecs,
+  positionIntervalProbability, wilson,
+} from '../engine/constraints.ts'
+import { analyzeConstraints, MIN_CONSTRAINT_HISTORY, sampleUniverse } from '../engine/constraintlab.ts'
+import { orderStatPmf } from '../engine/positions.ts'
+import { choose } from '../engine/odds.ts'
+import { dowOf } from '../engine/dates.ts'
+import type { Draw } from '../engine/types.ts'
+
+const K = 69
+const D = 5
+
+/** A fair machine: every combination equally likely, no structure whatsoever. */
+function fairDraws(n: number, seed = 12345, pool = K, size = D): Draw[] {
+  let a = seed >>> 0
+  const rnd = () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = Math.imul(a ^ (a >>> 15), 1 | a)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const draws: Draw[] = []
+  const bag = new Int32Array(pool)
+  for (let i = 0; i < pool; i++) bag[i] = i + 1
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < size; j++) {
+      const k = j + Math.floor(rnd() * (pool - j))
+      const t = bag[j]; bag[j] = bag[k]; bag[k] = t
+    }
+    const sorted = Array.from(bag.slice(0, size)).sort((x, y) => x - y)
+    const day = new Date(Date.UTC(2015, 0, 3 + i * 3))
+    const date = day.toISOString().slice(0, 10)
+    draws.push({ date, dow: dowOf(date), numbers: sorted, sorted })
+  }
+  return draws
+}
+
+describe('order-statistic probabilities', () => {
+  it('matches the exact hypergeometric identity for every position', () => {
+    for (let r = 1; r <= D; r++) {
+      let total = 0
+      for (let v = 1; v <= K; v++) total += orderStatPmf(K, D, r, v)
+      expect(total).toBeCloseTo(1, 10)
+    }
+  })
+
+  it('is zero outside the range arithmetic allows', () => {
+    // the r-th smallest can never be below r, nor above K − (D − r)
+    for (let r = 1; r <= D; r++) {
+      expect(orderStatPmf(K, D, r, r - 1)).toBe(0)
+      expect(orderStatPmf(K, D, r, K - (D - r) + 1)).toBe(0)
+      expect(orderStatPmf(K, D, r, r)).toBeGreaterThan(0)
+      expect(orderStatPmf(K, D, r, K - (D - r))).toBeGreaterThan(0)
+    }
+  })
+
+  it('counts an interval exactly, against a brute-force enumeration', () => {
+    // small pool so every combination can be enumerated
+    const k = 12, d = 4, r = 2, lo = 3, hi = 6
+    let hits = 0
+    for (let a = 1; a <= k; a++)
+      for (let b = a + 1; b <= k; b++)
+        for (let c = b + 1; c <= k; c++)
+          for (let e = c + 1; e <= k; e++) {
+            const v = [a, b, c, e][r - 1]
+            if (v >= lo && v <= hi) hits++
+          }
+    expect(positionIntervalProbability(k, d, r, lo, hi)).toBeCloseTo(hits / choose(k, d), 12)
+  })
+})
+
+describe('feature extraction', () => {
+  const specs = featureSpecs(K, D)
+  const idx = (key: string) => specs.findIndex((s) => s.key === key)
+
+  it('measures a known combination correctly', () => {
+    const f = extractFeatures([3, 4, 5, 40, 62], K, EMPTY_CONTEXT)
+    expect(f[idx('pos1')]).toBe(3)
+    expect(f[idx('pos5')]).toBe(62)
+    expect(f[idx('gap1')]).toBe(1)
+    expect(f[idx('gap4')]).toBe(22)
+    expect(f[idx('sum')]).toBe(114)
+    expect(f[idx('sumLow2')]).toBe(7)
+    expect(f[idx('sumLow3')]).toBe(12)
+    expect(f[idx('sumHigh2')]).toBe(102)
+    expect(f[idx('spread')]).toBe(59)
+    expect(f[idx('consec')]).toBe(2)
+    expect(f[idx('runs')]).toBe(1)
+    expect(f[idx('maxGap')]).toBe(35)
+    expect(f[idx('minGap')]).toBe(1)
+    expect(f[idx('odd')]).toBe(2)
+    expect(f[idx('prime')]).toBe(2) // 3 and 5; 4, 40, 62 are composite
+    expect(f[idx('lastDigitDup')]).toBe(0)
+    expect(f.length).toBe(featureCount(D))
+  })
+
+  it('leaves conditional features undefined with no previous draw', () => {
+    const f = extractFeatures([1, 2, 3, 4, 5], K, EMPTY_CONTEXT)
+    expect(Number.isNaN(f[idx('repeatPrev')])).toBe(true)
+    expect(Number.isNaN(f[idx('dSum')])).toBe(true)
+  })
+
+  it('measures repeats and deltas against real history', () => {
+    const draws: Draw[] = [
+      { date: '2020-01-01', dow: 3, numbers: [1, 2, 3, 4, 5], sorted: [1, 2, 3, 4, 5] },
+      { date: '2020-01-04', dow: 6, numbers: [3, 4, 50, 60, 69], sorted: [3, 4, 50, 60, 69] },
+    ]
+    const f = extractFeatures(draws[1].sorted, K, contextAt(draws, 1))
+    expect(f[idx('repeatPrev')]).toBe(2) // 3 and 4 carried over
+    expect(f[idx('dSum')]).toBe(186 - 15)
+    expect(f[idx('dSpread')]).toBe(66 - 4)
+  })
+
+  it('never lets an unseen value fall to zero probability', () => {
+    const state = new ConstraintState(K, D)
+    for (const d of fairDraws(300)) state.push(extractFeatures(d.sorted, K, EMPTY_CONTEXT), d.dow)
+    const sumIdx = idx('sum')
+    const { count, p } = state.at(sumIdx, 20) // a sum that will not have occurred
+    expect(count).toBe(0)
+    expect(p).toBeGreaterThan(0)
+  })
+
+  it('never derives an interval outside what arithmetic allows', () => {
+    const state = new ConstraintState(K, D)
+    for (const d of fairDraws(400)) state.push(extractFeatures(d.sorted, K, EMPTY_CONTEXT), d.dow)
+    featureSpecs(K, D).forEach((spec, i) => {
+      for (const alpha of [0.0005, 0.03]) {
+        const { lo, hi } = state.interval(i, alpha)
+        expect(lo).toBeGreaterThanOrEqual(spec.hardMin)
+        expect(hi).toBeLessThanOrEqual(spec.hardMax)
+        expect(lo).toBeLessThanOrEqual(hi)
+      }
+    })
+  })
+
+  it('gives the same interval whether asked one at a time or in a batch', () => {
+    const state = new ConstraintState(K, D)
+    for (const d of fairDraws(500, 999)) state.push(extractFeatures(d.sorted, K, EMPTY_CONTEXT), d.dow)
+    const alphas = [0.0005, 0.002, 0.01, 0.03]
+    const batch = alphas.map(() => ({ lo: 0, hi: 0 }))
+    for (let i = 0; i < featureSpecs(K, D).length; i++) {
+      state.intervalsFor(i, alphas, batch)
+      alphas.forEach((a, ai) => expect(batch[ai]).toEqual(state.interval(i, a)))
+    }
+  })
+})
+
+describe('Wilson interval', () => {
+  it('brackets a proportion and stays inside [0,1] at the extremes', () => {
+    const mid = wilson(50, 100)
+    expect(mid.lo).toBeLessThan(0.5)
+    expect(mid.hi).toBeGreaterThan(0.5)
+    const perfect = wilson(200, 200)
+    expect(perfect.hi).toBe(1)
+    expect(perfect.lo).toBeGreaterThan(0.97)
+    expect(perfect.lo).toBeLessThan(1) // never claims certainty
+    expect(wilson(0, 0)).toEqual({ lo: 0, hi: 1 })
+  })
+})
+
+describe('the uniform sample', () => {
+  it('reproduces the exact order-statistic distribution', () => {
+    const specs = featureSpecs(K, D)
+    const s = sampleUniverse(K, D, 20000, specs, 7)
+    const p1 = specs.findIndex((x) => x.key === 'pos1')
+    let mean = 0
+    for (let i = 0; i < s.size; i++) mean += s.values[p1][i]
+    mean /= s.size
+    // E[1st of 5 from 69] = (K+1)/(D+1) = 11.67
+    expect(mean).toBeGreaterThan(11.0)
+    expect(mean).toBeLessThan(12.4)
+  })
+
+  it('is deterministic for a given seed', () => {
+    const specs = featureSpecs(K, D)
+    const a = sampleUniverse(K, D, 500, specs, 42)
+    const b = sampleUniverse(K, D, 500, specs, 42)
+    expect(a.combos[17]).toEqual(b.combos[17])
+  })
+})
+
+describe('walk-forward constraint backtest', () => {
+  const draws = fairDraws(700)
+  const lab = analyzeConstraints(draws, K, D)!
+
+  it('produces a lab once there is enough history', () => {
+    expect(lab).not.toBeNull()
+    expect(lab.evaluated).toBe(draws.length - MIN_CONSTRAINT_HISTORY)
+    expect(lab.universe).toBe(choose(K, D))
+  })
+
+  it('refuses to run on too little history', () => {
+    expect(analyzeConstraints(fairDraws(100), K, D)).toBeNull()
+  })
+
+  it('never leaks the future: changing later draws cannot move earlier verdicts', () => {
+    // Two histories of identical length sharing their first 500 draws. Every
+    // evaluated step in the first half falls inside that shared prefix, so if
+    // any rule were fitted with knowledge of what came later, its first-half
+    // survival would move when the tail is swapped. It must not.
+    const shared = fairDraws(500, 777)
+    const a = [...shared, ...fairDraws(200, 1001)]
+    const b = [...shared, ...fairDraws(200, 2002)]
+    const la = analyzeConstraints(a, K, D)!
+    const lb = analyzeConstraints(b, K, D)!
+    expect(la.evaluated).toBe(lb.evaluated)
+    const half = Math.floor(la.evaluated / 2)
+    expect(MIN_CONSTRAINT_HISTORY + half).toBeLessThan(500) // the half really is inside the shared prefix
+
+    const byId = new Map(lb.rules.map((r) => [r.id, r]))
+    let compared = 0
+    for (const r of la.rules) {
+      const other = byId.get(r.id)!
+      expect(other.firstHalfSurvival).toBeCloseTo(r.firstHalfSurvival, 12)
+      compared++
+    }
+    expect(compared).toBeGreaterThan(100)
+  })
+
+  it('keeps every derived range inside the arithmetic bounds', () => {
+    for (const r of lab.rules) {
+      expect(r.lo).toBeGreaterThanOrEqual(r.hardMin)
+      expect(r.hi).toBeLessThanOrEqual(r.hardMax)
+    }
+  })
+
+  it('counts survivors consistently: space share and survival are both proportions', () => {
+    for (const r of lab.rules) {
+      expect(r.spaceShare).toBeGreaterThanOrEqual(0)
+      expect(r.spaceShare).toBeLessThanOrEqual(1)
+      expect(r.survival).toBeGreaterThanOrEqual(0)
+      expect(r.survival).toBeLessThanOrEqual(1)
+      expect(r.survivalLo).toBeLessThanOrEqual(r.survival + 1e-9)
+      expect(r.survivalHi).toBeGreaterThanOrEqual(r.survival - 1e-9)
+    }
+  })
+
+  it('only ever combines rules that do not depend on the previous draw', () => {
+    const conditional = new Set(featureSpecs(K, D).filter((s) => s.conditional).map((s) => s.key))
+    for (const mode of lab.modes) {
+      for (const id of mode.ruleIds) {
+        const rule = lab.rules.find((r) => r.id === id)!
+        expect(conditional.has(rule.featureKey)).toBe(false)
+      }
+    }
+  })
+
+  it('honours each mode’s survival floor on the draws it selected from', () => {
+    for (const mode of lab.modes) {
+      if (mode.ruleIds.length === 0) continue
+      expect(mode.combinationsAfter).toBeLessThanOrEqual(mode.combinationsBefore)
+      expect(mode.spaceShare).toBeLessThanOrEqual(1)
+    }
+  })
+
+  it('reports a Pareto path that only ever tightens', () => {
+    for (let i = 1; i < lab.pareto.length; i++) {
+      expect(lab.pareto[i].spaceShare).toBeLessThanOrEqual(lab.pareto[i - 1].spaceShare + 1e-9)
+    }
+  })
+})
+
+describe('fair synthetic data must not manufacture an edge', () => {
+  /**
+   * The whole feature rests on one identity: for a uniform draw, the chance the
+   * winner survives a filter equals the share of combinations that filter
+   * keeps. On data generated to be exactly fair, every rule must sit on that
+   * line — any systematic gap would mean the estimator, not the lottery, is
+   * producing the edge.
+   */
+  const lab = analyzeConstraints(fairDraws(900, 4242), K, D)!
+
+  it('finds no rule with a real edge over its own space share', () => {
+    const proven = lab.rules.filter((r) => r.provenEdge)
+    // 136 correlated tests: the odd 2σ is expected, a pile of them is not
+    expect(proven.length).toBeLessThan(8)
+  })
+
+  it('keeps survival and space share matched on average', () => {
+    const usable = lab.rules.filter((r) => r.usable && r.spaceShare < 0.999)
+    expect(usable.length).toBeGreaterThan(10)
+    const meanGap = usable.reduce((s, r) => s + (r.survival - r.spaceShare), 0) / usable.length
+    // averaged over every rule the two must agree to well under a percentage point
+    expect(Math.abs(meanGap)).toBeLessThan(0.01)
+  })
+
+  it('never reports a mode that cuts space for free', () => {
+    for (const mode of lab.modes) {
+      if (mode.ruleIds.length === 0) continue
+      // 2σ is the threshold the panel uses to call an edge real, so on fair
+      // draws no mode may reach it in either direction.
+      expect(Math.abs(mode.holdoutEdgeZ)).toBeLessThan(2)
+      // The headline pair has to obey the identity it is printed next to.
+      expect(Math.abs(mode.survival - mode.spaceShare)).toBeLessThan(0.015)
+    }
+  })
+
+  it('shows the optimiser flattering itself, which is why the holdout is reported', () => {
+    // The greedy picked these rules on the first half, so the in-sample figure
+    // is inflated by construction — on fair data it still reads positive. If
+    // the held-out number ever stopped being the lower of the two, the holdout
+    // would have stopped doing its job.
+    const selected = lab.modes.filter((m) => m.ruleIds.length > 0)
+    expect(selected.length).toBeGreaterThan(0)
+    for (const mode of selected) expect(mode.edgeZ).toBeGreaterThan(mode.holdoutEdgeZ)
+  })
+
+  it('measures space share at the same intervals survival was tested with', () => {
+    // Scoring walk-forward survival against the final interval's space share
+    // overstated every mode by about two percentage points. The two estimates
+    // now come from the same rule, so a mode that keeps 96% of winners must be
+    // keeping close to 96% of the space — not 90%.
+    for (const mode of lab.modes) {
+      if (mode.ruleIds.length === 0) continue
+      const funnelEnd = mode.funnel[mode.funnel.length - 1]
+      expect(funnelEnd.spaceShare).toBeCloseTo(mode.spaceShare, 6)
+      const removed = mode.funnel.reduce((s, f) => s + f.removed, 0)
+      expect(removed).toBeCloseTo(1 - mode.spaceShare, 6)
+    }
+  })
+
+  it('states plainly when nothing beat the fair line', () => {
+    const proven = lab.rules.filter((r) => r.provenEdge)
+    if (proven.length === 0) expect(lab.verdict).toMatch(/fair machine|No constraint/i)
+  })
+})
+
+describe('rule-era separation', () => {
+  /** 400 fair draws on a 59-ball pool, then 500 on 69 — Powerball's 2015 change. */
+  const acrossPoolChange = () => {
+    const old = fairDraws(400, 11, 59, D)
+    const modern = fairDraws(500, 22, 69, D).map((d, i) => ({
+      ...d,
+      date: new Date(Date.UTC(2019, 0, 3 + i * 3)).toISOString().slice(0, 10),
+    }))
+    return [...old, ...modern]
+  }
+
+  it('drops the retired pool instead of fitting ranges across the change', () => {
+    const lab = analyzeConstraints(acrossPoolChange(), 69, D)
+    expect(lab).not.toBeNull()
+    expect(lab!.eraTrim).not.toBeNull()
+    expect(lab!.eraTrim!.earlyMax).toBeLessThanOrEqual(59)
+    expect(lab!.eraTrim!.currentMax).toBe(69)
+    // Only the modern draws may be scored, so the walk-forward record cannot be
+    // longer than the modern era minus the history each rule needs to exist.
+    expect(lab!.evaluated).toBeLessThanOrEqual(500 - MIN_CONSTRAINT_HISTORY)
+    expect(lab!.eraTrim!.excluded).toBeGreaterThanOrEqual(400)
+  })
+
+  it('does not manufacture an edge from the retired pool', () => {
+    // Fitted across the change, "the 5th number stays under 60" holds for 400 of
+    // 900 draws and reads as a colossal edge against a 69-ball sample. Scoped to
+    // one era it is what it always was on fair draws: nothing.
+    const lab = analyzeConstraints(acrossPoolChange(), 69, D)!
+    const pos5 = lab.rules.filter((r) => r.featureKey === `pos${D}`)
+    expect(pos5.length).toBeGreaterThan(0)
+    for (const r of pos5) expect(r.edgeZ).toBeLessThan(4)
+    expect(lab.rules.filter((r) => r.provenEdge).length).toBeLessThan(8)
+  })
+
+  it('uses the current pool when a shrinking pool inflated the detected maximum', () => {
+    // Mega Millions went the other way: 75 mains down to 70. The lab must size
+    // its universe on 70, not on a ball the game no longer has.
+    const old = fairDraws(400, 33, 75, D)
+    const modern = fairDraws(500, 44, 70, D).map((d, i) => ({
+      ...d,
+      date: new Date(Date.UTC(2019, 0, 3 + i * 3)).toISOString().slice(0, 10),
+    }))
+    const lab = analyzeConstraints([...old, ...modern], 75, D)
+    expect(lab).not.toBeNull()
+    expect(lab!.K).toBe(70)
+    expect(lab!.universe).toBe(choose(70, D))
+  })
+})

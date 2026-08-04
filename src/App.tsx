@@ -33,6 +33,7 @@ import { JackpotPanel } from './components/JackpotPanel.tsx'
 import { InspectorPanel } from './components/InspectorPanel.tsx'
 import { TicketLab } from './components/TicketLab.tsx'
 import { PortfolioPanel } from './components/PortfolioPanel.tsx'
+import { ConstraintLabPanel } from './components/ConstraintLabPanel.tsx'
 import { ValuePanel } from './components/ValuePanel.tsx'
 import { RecapBanner } from './components/RecapBanner.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
@@ -43,6 +44,7 @@ const NAV = [
   ['prediction', 'Prediction'],
   ['value', 'Is it worth it'],
   ['portfolio', 'Play together'],
+  ['constraints', 'Constraint Lab'],
   ['ranking', 'Ranking'],
   ['log', 'Prediction log'],
   ['columns', 'Columns'],
@@ -586,6 +588,7 @@ export default function App() {
                 res={result}
                 onSaveTicket={saveTicket}
               />
+              <ConstraintLabPanel res={result} draws={draws} />
               <RealityPanel res={result} />
               <RankingTable res={result} />
               <PredictionLog res={result} />
