@@ -121,7 +121,7 @@ const TICKET_TRIES = 1200
 function pickTicket(
   scores: Float64Array, K: number, D: number, used: Int32Array,
   fresh: number, shape: PortfolioShape | null, rnd: () => number,
-  exclude?: Set<string>,
+  exclude?: Set<string>, accept?: ((sorted: number[]) => boolean) | null,
 ): number[] {
   let hi = -Infinity
   let lo = Infinity
@@ -141,7 +141,8 @@ function pickTicket(
   const wantRepeat = Math.min(D - wantFresh, usedPool.length)
   const topUp = D - wantFresh - wantRepeat
 
-  const allowed = (sorted: number[]): boolean => !exclude?.has(sorted.join('-'))
+  const allowed = (sorted: number[]): boolean =>
+    !exclude?.has(sorted.join('-')) && (!accept || accept(sorted))
   const byValue = (a: number, b: number) => scores[b] - scores[a] || a - b
   const greedy = [
     ...unusedPool.slice().sort(byValue).slice(0, wantFresh + topUp),
@@ -286,6 +287,12 @@ export interface PortfolioOptions {
    * co-winners, and a shared jackpot pays less.
    */
   exclude?: Set<string>
+  /**
+   * The reduced pool as a membership test. When set, every suggested ticket
+   * must come from inside it — the same pool the model's own pick is generated
+   * from, so the two features never disagree about what is worth playing.
+   */
+  accept?: ((sorted: number[]) => boolean) | null
   trials?: number
   seed?: number
   tiers?: PrizeTier[]
@@ -346,7 +353,7 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
     const fresh = t === 0
       ? D
       : Math.round((budget * t) / (count - 1)) - Math.round((budget * (t - 1)) / (count - 1))
-    const numbers = pickTicket(scores, K, D, used, fresh, shape, mulberry32(seed + t * 7919), opts.exclude)
+    const numbers = pickTicket(scores, K, D, used, fresh, shape, mulberry32(seed + t * 7919), opts.exclude, opts.accept)
     const ticket: PortfolioTicket = { numbers }
     if (specialK > 0) {
       // At zero spread every ticket is one pick repeated, bonus ball included
@@ -357,7 +364,7 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
 
   // Same count, every ticket identical to the model's single best pick
   const topUsed = new Int32Array(K + 1)
-  const top = pickTicket(scores, K, D, topUsed, D, shape, mulberry32(seed), opts.exclude)
+  const top = pickTicket(scores, K, D, topUsed, D, shape, mulberry32(seed), opts.exclude, opts.accept)
   const concentrated: PortfolioTicket[] = Array.from({ length: count }, () => {
     const t: PortfolioTicket = { numbers: top }
     if (specialK > 0) t.special = specialPicks[0] ?? 1

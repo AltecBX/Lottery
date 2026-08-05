@@ -1213,7 +1213,7 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 
 .cl-modes { display: flex; gap: 7px; margin-bottom: 14px; flex-wrap: wrap; }
 .cl-modes button {
-  flex: 1 1 0; min-width: 96px; min-height: 52px; cursor: pointer;
+  flex: 1 1 0; min-width: 78px; min-height: 52px; cursor: pointer;
   display: grid; gap: 1px; padding: 8px 10px; border-radius: 12px;
   border: 1px solid var(--border); background: var(--surface-2);
   font-size: 13.5px; font-weight: 640; color: var(--ink-2);

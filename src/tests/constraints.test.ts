@@ -5,7 +5,7 @@ import {
 } from '../engine/constraints.ts'
 import {
   adjacencyAtLeast, analyzeConstraints, clusteredCombos, countRthAtMost, MIN_CONSTRAINT_HISTORY,
-  reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, sumAtMostCount, windowCount,
+  reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, sumAtMostCount, sumBoundedCombos, windowCount,
 } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
 import { choose } from '../engine/odds.ts'
@@ -581,5 +581,79 @@ describe('generating the prediction from the reduced pool', () => {
     expect(accept(res.bestCombo!.numbers)).toBe(true)
     expect(res.bestCombo!.notes).toContain('inside the reduced pool')
     for (const alt of res.altCombos) expect(accept(alt.numbers)).toBe(true)
+  })
+})
+
+describe('the deep cut and the record-total boundary', () => {
+  const draws = fairDraws(900, 20265)
+  const lab = analyzeConstraints(draws, K, D)!
+
+  it('enumerates sum-bounded combinations in exact agreement with the DP count', () => {
+    let n = 0
+    const seen = new Set<string>()
+    for (const combo of sumBoundedCombos(K, D, 90)) {
+      n++
+      seen.add(combo.join('-'))
+      expect(combo.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(90)
+    }
+    expect(n).toBe(sumAtMostCount(K, D, 90))
+    expect(seen.size).toBe(n)
+  })
+
+  it('records the era sum extremes and cuts at them', () => {
+    expect(lab.sumRecord).not.toBeNull()
+    const rec = lab.sumRecord!
+    expect(rec.min).toBeGreaterThanOrEqual(15)
+    expect(rec.max).toBeLessThanOrEqual(335)
+    const balanced = lab.modes.find((m) => m.key === 'balanced')!
+    const accept = reducedPoolAcceptor(lab, balanced, new Set())
+    // A spread-out, non-clustered set summing 325 — beyond any fair record here
+    expect(accept([61, 63, 65, 67, 69])).toBe(false)
+    // With the Balanced bands active the record-total regions are usually
+    // already inside the cut, and the row must then honestly read zero rather
+    // than deduct them twice.
+    const led = reductionLedger(lab, balanced, draws, 26)
+    const sums = led.rows.find((r) => r.key === 'sums')!
+    expect(sums.exact).toBe(true)
+    expect(sums.winnersNote).toMatch(/would have cost \d+ real winners/)
+    const removed = led.rows.reduce((s, r) => s + r.removed, 0)
+    expect(led.start - removed).toBe(led.remaining)
+    // With no bands in the way, the row must carry the full enumerated regions
+    // less only the true overlaps with past draws and the families.
+    const bare = { ...balanced, ruleIds: [] }
+    const ledBare = reductionLedger(lab, bare, draws, 26)
+    const sumsBare = ledBare.rows.find((r) => r.key === 'sums')!
+    const regionCap = (sumAtMostCount(K, D, rec.min) + sumAtMostCount(K, D, D * (K + 1) - rec.max)) * 26
+    expect(sumsBare.removed).toBeGreaterThan(0)
+    expect(sumsBare.removed).toBeLessThanOrEqual(regionCap)
+  })
+
+  it('offers the deep cut, and its bill obeys the identity', () => {
+    const deep = lab.modes.find((m) => m.key === 'deep')!
+    expect(deep.ruleIds.length).toBeGreaterThan(3)
+    // Removing about a third of the space must cost about a third of winners —
+    // anything else would mean the machinery is inventing an edge.
+    expect(deep.spaceShare).toBeLessThan(0.8)
+    expect(deep.spaceShare).toBeGreaterThan(0.45)
+    expect(Math.abs(deep.survival - deep.spaceShare)).toBeLessThan(0.08)
+  })
+
+  it('keeps every Play-together ticket inside the reduced pool', () => {
+    const balanced = lab.modes.find((m) => m.key === 'balanced')!
+    const pastKeys = new Set(draws.map((d) => d.sorted.join('-')))
+    const accept = reducedPoolAcceptor(lab, balanced, pastKeys)
+    const scores = new Float64Array(K + 1)
+    for (let n = 1; n <= K; n++) scores[n] = 1 + ((n * 37) % 50) * 0.01
+    const shape = {
+      lo: lab.positionBands.map((b) => b.lo),
+      hi: lab.positionBands.map((b) => b.hi),
+      sumLo: lab.sumRecord!.min + 1,
+      sumHi: lab.sumRecord!.max - 1,
+    }
+    const pf = buildPortfolio({
+      scores, K, D, specialK: 26, specialPicks: [5, 9], count: 6, spread: 0.7,
+      shape, exclude: pastKeys, accept, trials: 60,
+    })
+    for (const t of pf.tickets) expect(accept(t.numbers)).toBe(true)
   })
 })

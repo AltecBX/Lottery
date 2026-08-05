@@ -76,7 +76,7 @@ export interface FunnelStep {
 }
 
 export interface ConstraintMode {
-  key: 'conservative' | 'balanced' | 'aggressive'
+  key: 'conservative' | 'balanced' | 'aggressive' | 'deep'
   label: string
   /** Walk-forward winner survival this mode refuses to go below */
   target: number
@@ -133,6 +133,8 @@ export interface ConstraintLab {
   }[]
   /** Sorted-spreadsheet shapes priced exactly: combos, share, expected vs observed */
   presets: PresetElimination[]
+  /** Record totals in the era's own draws — the sum cut's boundaries */
+  sumRecord: { min: number; max: number; minDate: string; maxDate: string } | null
   /** Every candidate rule, best first */
   rules: ConstraintRule[]
   modes: ConstraintMode[]
@@ -534,6 +536,16 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
   })
 
   const presets = presetEliminations(draws, K, D, universe)
+  let sumRecord: ConstraintLab['sumRecord'] = null
+  for (const d of draws) {
+    const total = d.sorted.reduce((a, b) => a + b, 0)
+    if (!sumRecord) {
+      sumRecord = { min: total, max: total, minDate: d.date, maxDate: d.date }
+    } else {
+      if (total < sumRecord.min) { sumRecord.min = total; sumRecord.minDate = d.date }
+      if (total > sumRecord.max) { sumRecord.max = total; sumRecord.maxDate = d.date }
+    }
+  }
 
   const usableRules = rules.filter((r) => r.usable)
   const best = [...usableRules].sort((a, b) => b.edgeZ - a.edgeZ)[0]
@@ -549,7 +561,7 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
   rules.sort((a, b) => Number(b.usable) - Number(a.usable) || b.edgeZ - a.edgeZ)
 
   return {
-    K, drawSize: D, universe, evaluated, eraTrim, positionBands, presets,
+    K, drawSize: D, universe, evaluated, eraTrim, positionBands, presets, sumRecord,
     rules, modes, pareto, sampleSize: sample.size, verdict,
   }
 }
@@ -840,8 +852,14 @@ function matchedPrefixShares(
   return { prefix: Array.from(acc, (v) => (steps ? v / steps : 1)), steps }
 }
 
-/** Sample enough draws for the step-average to settle without paying for all of them. */
-const strideFor = (evaluated: number): number => Math.max(1, Math.round(evaluated / 450))
+/**
+ * Sample enough draws for the step-average to settle without paying for all of
+ * them. The budget is per rule: a deep selection of thirty rules walks the
+ * sample thirty times per step, so its stride grows to keep the whole pass at
+ * a fixed cost — measured error at stride 3 was 0.006 of a percentage point.
+ */
+const strideFor = (evaluated: number, ruleCount = 1): number =>
+  Math.max(1, Math.round(evaluated / 450), Math.round((evaluated * ruleCount) / 3000))
 
 /**
  * Joint survival for a selected set of rules, plus the final-interval space
@@ -894,6 +912,14 @@ const MODE_TARGETS: { key: ConstraintMode['key']; label: string; target: number 
   { key: 'conservative', label: 'Conservative', target: 0.99 },
   { key: 'balanced', label: 'Balanced', target: 0.97 },
   { key: 'aggressive', label: 'Aggressive', target: 0.94 },
+  /*
+   * The under-200-million setting. Cutting a Powerball-sized pool below 200M
+   * means removing about a third of the space, and the identity prices that in
+   * winners: roughly a third of them go too. This mode exists so the trade can
+   * be taken with open eyes rather than pretended away — the ledger prints the
+   * remainder and the winners-kept figure side by side.
+   */
+  { key: 'deep', label: 'Deep cut', target: 0.68 },
 ]
 
 /**
@@ -916,7 +942,6 @@ function buildModes(
   universe: number,
 ): ConstraintMode[] {
   const sampleSize = sample.size
-  const stride = strideFor(evaluated)
   // Ranked by how much space each removes on its own; the greedy step below
   // decides what that costs in winners.
   const candidates = rules
@@ -931,16 +956,32 @@ function buildModes(
     // Select on the first half only; the second half stays unseen so the
     // selection can be judged rather than admired.
     const half = Math.floor(evaluated / 2)
-    let current = { survival: 1, spaceShare: 1, failedSteps: [] as number[], n: half }
+    let current = { survival: 1, spaceShare: 1 }
     const taken = new Set<number>()
 
+    // The joint state is carried incrementally: one survivor mask over the
+    // sample and one pass mask over the first-half steps. Trying a candidate is
+    // then a single AND-and-count against each, not a from-scratch rebuild of
+    // the whole conjunction — which is what makes the deep setting affordable,
+    // since its greedy runs to dozens of rules over dozens of candidates.
+    const aliveS = new Uint8Array(sampleSize).fill(1)
+    const aliveH = new Uint8Array(half).fill(1)
     for (;;) {
       let bestIdx = -1
-      let bestRes: ReturnType<typeof evaluateSet> | null = null
+      let bestRes: { survival: number; spaceShare: number } | null = null
       let bestScore = 0
       for (const { i } of candidates) {
         if (taken.has(i)) continue
-        const res = evaluateSet([...chosen, i], ruleSurvivors, passMatrix, nRules, half, sampleSize)
+        const mask = ruleSurvivors[i]
+        let kept = 0
+        if (mask) {
+          for (let s = 0; s < sampleSize; s++) kept += aliveS[s] & mask[s]
+        } else {
+          for (let s = 0; s < sampleSize; s++) kept += aliveS[s]
+        }
+        let hits = 0
+        for (let step = 0; step < half; step++) hits += aliveH[step] & passMatrix[step * nRules + i]
+        const res = { survival: half > 0 ? hits / half : 1, spaceShare: kept / sampleSize }
         if (res.survival < target) continue
         const gain = current.spaceShare - res.spaceShare
         if (gain <= 1e-6) continue
@@ -950,6 +991,9 @@ function buildModes(
         if (score > bestScore) { bestScore = score; bestIdx = i; bestRes = res }
       }
       if (bestIdx < 0 || !bestRes) break
+      const chosenMask = ruleSurvivors[bestIdx]
+      if (chosenMask) for (let s = 0; s < sampleSize; s++) aliveS[s] &= chosenMask[s]
+      for (let step = 0; step < half; step++) aliveH[step] &= passMatrix[step * nRules + bestIdx]
       chosen.push(bestIdx)
       taken.add(bestIdx)
       funnel.push({
@@ -968,6 +1012,7 @@ function buildModes(
     // Re-measure the space against the walk-forward intervals, in-sample and
     // held-out separately, so each survival figure is compared with the share
     // its own rules were keeping at the time.
+    const stride = strideFor(evaluated, Math.max(1, chosen.length))
     const inS = matchedPrefixShares(chosen, stepIv, sample, nRules, 0, half, stride)
     const outS = matchedPrefixShares(chosen, stepIv, sample, nRules, half, evaluated, stride)
     const last = chosen.length - 1
@@ -1028,7 +1073,7 @@ function buildPareto(
   const chosen = order.map(({ i }) => i)
   const points: ConstraintLab['pareto'] = [{ spaceShare: 1, survival: 1, rules: 0 }]
   if (!chosen.length) return points
-  const shares = matchedPrefixShares(chosen, stepIv, sample, nRules, 0, evaluated, strideFor(evaluated))
+  const shares = matchedPrefixShares(chosen, stepIv, sample, nRules, 0, evaluated, strideFor(evaluated, chosen.length))
   for (let k = 0; k < chosen.length; k++) {
     const res = evaluateSet(chosen.slice(0, k + 1), ruleSurvivors, passMatrix, nRules, evaluated, sample.size)
     points.push({ spaceShare: shares.prefix[k], survival: res.survival, rules: k + 1 })
@@ -1068,6 +1113,23 @@ export interface ReductionLedger {
   repeatExample: { numbers: number[]; first: string; second: string } | null
 }
 
+/** Every D-combination of 1..K with total ≤ bound, by pruned DFS. */
+export function* sumBoundedCombos(K: number, D: number, bound: number): Generator<number[]> {
+  const combo: number[] = []
+  // Minimal completion from value v: v, v+1, … — prune when even that overshoots
+  function* walk(start: number, left: number, budget: number): Generator<number[]> {
+    if (left === 0) { yield [...combo]; return }
+    for (let v = start; v <= K - left + 1; v++) {
+      const minRest = left * v + (left * (left - 1)) / 2
+      if (minRest > budget) return
+      combo.push(v)
+      yield* walk(v + 1, left - 1, budget - v)
+      combo.pop()
+    }
+  }
+  yield* walk(1, D, bound)
+}
+
 /** Exact membership test for a mode's context-free rule set. */
 export function modePredicate(lab: ConstraintLab, mode: ConstraintMode): (sorted: number[]) => boolean {
   const specs = featureSpecs(lab.K, lab.drawSize)
@@ -1100,11 +1162,19 @@ export function reducedPoolAcceptor(
 ): (sorted: number[]) => boolean {
   const passesMode = modePredicate(lab, mode)
   const D = lab.drawSize
+  const rec = lab.sumRecord
   return (sorted: number[]): boolean => {
     if (sorted[D - 2] <= 5 || sorted[D - 1] <= 9) return false
     let adj = 0
-    for (let i = 1; i < D; i++) if (sorted[i] - sorted[i - 1] === 1) adj++
+    let total = 0
+    for (let i = 0; i < D; i++) {
+      total += sorted[i]
+      if (i > 0 && sorted[i] - sorted[i - 1] === 1) adj++
+    }
     if (adj >= 3) return false
+    // Totals at or beyond the era's records are cut — deliberately including
+    // the record draws themselves, and the ledger charges those two winners.
+    if (rec && (total <= rec.min || total >= rec.max)) return false
     if (pastKeys.has(sorted.join('-'))) return false
     return passesMode(sorted)
   }
@@ -1224,6 +1294,40 @@ export function reductionLedger(
   push('families', `Clustered and never-seen families (three or more touching pairs, every 1-2-3-4-x, all inside 1–9) not already cut`,
     familySurvivors * sk,
     'cost 0 tested winners here — these shapes never once appeared', true)
+
+  // Totals at or beyond the era's records, enumerated member by member. The
+  // regions are small enough to walk exactly: the low side directly, the high
+  // side through the mirror n → K+1−n, which turns "sum ≥ max" into "sum ≤
+  // D·(K+1) − max".
+  const rec = lab.sumRecord
+  if (rec) {
+    let sumSurvivors = 0
+    let costLo = 0
+    let costHi = 0
+    const consider = (combo: number[]) => {
+      const key = combo.join('-')
+      if (seen.has(key) || family.has(key)) return
+      if (!passesMode(combo)) return
+      sumSurvivors++
+    }
+    for (const combo of sumBoundedCombos(K, D, rec.min)) consider(combo)
+    const mirrorBound = D * (K + 1) - rec.max
+    for (const combo of sumBoundedCombos(K, D, mirrorBound)) {
+      consider(combo.map((n) => K + 1 - n).sort((a, b) => a - b))
+    }
+    // The records are era-scoped, so the cost is counted over era draws too —
+    // old-pool draws with tiny totals are not this rule's bill.
+    const eraStart = lab.eraTrim?.cutoffDate ?? ''
+    for (const d of draws) {
+      if (d.date < eraStart) continue
+      const total = d.sorted.reduce((a, b) => a + b, 0)
+      if (total <= rec.min) costLo++
+      if (total >= rec.max) costHi++
+    }
+    push('sums', `Totals at or beyond the era records (≤ ${rec.min} and ≥ ${rec.max}) not already cut`,
+      sumSurvivors * sk,
+      `would have cost ${costLo + costHi} real winners — the record draws themselves`, true)
+  }
 
   let bonusBackToBack = 0
   for (let i = 1; i < draws.length; i++) {
