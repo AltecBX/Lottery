@@ -561,39 +561,56 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
    * argued: the floor each bonus value had established is checked against the
    * next draw that used it.
    */
+  /*
+   * Rules that read well off a sorted sheet, each put through the same test:
+   * build the rule from everything before a draw, then ask whether that draw
+   * breaks it. A rule worth applying almost never gets broken.
+   *
+   * The slicing family is the instructive one. "The total was never below X
+   * when the bonus ball was 26" splits the record across the bonus pool, and
+   * the finer the slice, the fewer draws hold up each floor — so the floor sits
+   * higher than the truth and the next draw walks under it. Running the same
+   * test at three granularities shows the break rate tracking group size and
+   * nothing else, which is what a sampling artefact looks like from the inside.
+   */
   const rejected: ConstraintLab['rejected'] = []
-  const hasSpecial = draws.some((d) => d.special !== undefined)
-  if (hasSpecial) {
+  const totalOf = (d: Draw) => d.sorted.reduce((a, b) => a + b, 0)
+  const sliceTest = (key: (d: Draw) => number | null) => {
     const floor = new Map<number, number>()
     let broke = 0
     let chances = 0
     for (const d of draws) {
-      if (d.special === undefined) continue
-      const total = d.sorted.reduce((a, b) => a + b, 0)
-      const prev = floor.get(d.special)
-      if (prev !== undefined) {
-        chances++
-        if (total < prev) broke++
-      }
-      floor.set(d.special, prev === undefined ? total : Math.min(prev, total))
+      const k = key(d)
+      if (k === null) continue
+      const v = totalOf(d)
+      const prev = floor.get(k)
+      if (prev !== undefined) { chances++; if (v < prev) broke++ }
+      floor.set(k, prev === undefined ? v : Math.min(prev, v))
     }
-    // The same test on one pooled floor, for contrast
-    let globalFloor = Number.POSITIVE_INFINITY
-    let gBroke = 0
-    let gChances = 0
-    for (const d of draws) {
-      const total = d.sorted.reduce((a, b) => a + b, 0)
-      if (Number.isFinite(globalFloor)) { gChances++; if (total < globalFloor) gBroke++ }
-      globalFloor = Math.min(globalFloor, total)
-    }
-    if (chances > 0) {
-      rejected.push({
-        label: 'A separate total floor for each bonus ball',
-        broke, chances, rate: broke / chances,
-        note: `The bonus ball is drawn from its own machine and carries no information about the main total. Splitting the record across the bonus pool leaves roughly ${Math.round(draws.length / Math.max(1, floor.size))} draws per value, so each "floor" is just the lowest of a small sample — and the next draw dives under it ${((broke / chances) * 100).toFixed(1)}% of the time. One pooled floor over the same draws breaks ${((gBroke / Math.max(1, gChances)) * 100).toFixed(1)}% of the time, which is why that is the cut the lab actually applies.`,
-      })
-    }
+    return { broke, chances, groups: floor.size }
   }
+
+  const pooled = sliceTest(() => 0)
+  const sliceCandidates: { label: string; key: (d: Draw) => number | null }[] = [
+    { label: 'A separate total floor for each bonus ball', key: (d) => d.special ?? null },
+    { label: 'A separate total floor for each starting decade', key: (d) => Math.floor((d.sorted[0] - 1) / 10) },
+    { label: 'A separate total floor for each odd/even split', key: (d) => d.sorted.filter((n) => n % 2).length },
+    { label: 'A separate total floor for each draw weekday', key: (d) => d.dow },
+  ]
+  for (const c of sliceCandidates) {
+    const r = sliceTest(c.key)
+    if (r.chances < 100 || r.groups < 2) continue
+    const rate = r.broke / r.chances
+    const pooledRate = pooled.chances ? pooled.broke / pooled.chances : 0
+    if (rate <= pooledRate * 1.5) continue
+    const per = Math.round(draws.length / r.groups)
+    rejected.push({
+      label: c.label,
+      broke: r.broke, chances: r.chances, rate,
+      note: `Splitting the record ${r.groups} ways leaves about ${per} draws behind each floor, so each one is the lowest of a small sample rather than a real limit — and the next draw goes under it ${(rate * 100).toFixed(1)}% of the time. One pooled floor over the same draws breaks ${(pooledRate * 100).toFixed(1)}%, which is the cut the lab actually applies.`,
+    })
+  }
+  rejected.sort((a, b) => b.rate - a.rate)
 
   const usableRules = rules.filter((r) => r.usable)
   const best = [...usableRules].sort((a, b) => b.edgeZ - a.edgeZ)[0]
@@ -645,6 +662,82 @@ export function windowCount(K: number, D: number, W: number): number {
   for (let m = 1; m <= K - 1; m++) total += choose(Math.min(W - 1, K - m), D - 1)
   return total
 }
+
+/**
+ * Fixed structural families, each with an exact count and a membership test.
+ *
+ * Unlike a "never seen below X" threshold read off the history, these are
+ * defined before the data is consulted, so they cannot be fitted to it — the
+ * count is arithmetic and the only question is how often the family shows up.
+ * On a full Powerball era every one of them lands on its expected count, which
+ * is the fair-lottery identity turning up again in a different disguise.
+ */
+export function structuralFamilies(K: number, D: number): {
+  key: string
+  label: string
+  combos: number
+  test: (sorted: number[]) => boolean
+  note: string
+}[] {
+  const prime = (n: number): boolean => {
+    if (n < 2) return false
+    for (let d = 2; d * d <= n; d++) if (n % d === 0) return false
+    return true
+  }
+  const countWhere = (f: (n: number) => boolean): number => {
+    let c = 0
+    for (let n = 1; n <= K; n++) if (f(n)) c++
+    return c
+  }
+  const decadeOf = (n: number): number => Math.floor((n - 1) / 10)
+  let oneDecade = 0
+  for (let d = 0; d <= decadeOf(K); d++) oneDecade += choose(countWhere((n) => decadeOf(n) === d), D)
+  let sameDigit = 0
+  for (let g = 0; g <= 9; g++) sameDigit += choose(countWhere((n) => n % 10 === g), D)
+  let spaced = 0
+  for (let step = 1; step <= Math.floor((K - 1) / (D - 1)); step++) spaced += K - step * (D - 1)
+
+  return [
+    {
+      key: 'oneDecade',
+      label: 'All five inside one decade',
+      combos: oneDecade,
+      test: (s) => decadeOf(s[0]) === decadeOf(s[D - 1]),
+      note: 'Every number sharing a tens digit — 41-43-46-47-49 and its relatives.',
+    },
+    {
+      key: 'mult5',
+      label: 'All five multiples of five',
+      combos: choose(countWhere((n) => n % 5 === 0), D),
+      test: (s) => s.every((n) => n % 5 === 0),
+      note: 'The round-number ticket: 10-25-40-55-65 and every other one like it.',
+    },
+    {
+      key: 'sameDigit',
+      label: 'All five sharing a last digit',
+      combos: sameDigit,
+      test: (s) => new Set(s.map((n) => n % 10)).size === 1,
+      note: '7-17-27-37-47 and the nine other digit runs.',
+    },
+    {
+      key: 'evenSpaced',
+      label: 'Evenly spaced across the pool',
+      combos: spaced,
+      test: (s) => { const g = s[1] - s[0]; return s.every((n, i) => i === 0 || n - s[i - 1] === g) },
+      note: 'Measured, never cut — this is the family that actually came up.',
+    },
+    {
+      key: 'allPrime',
+      label: 'All five prime',
+      combos: choose(countWhere(prime), D),
+      test: (s) => s.every(prime),
+      note: 'Measured, never cut — it has occurred, on the schedule its count predicts.',
+    },
+  ]
+}
+
+/** The families safe enough to leave out of the pool: tiny, and never observed. */
+export const CUT_FAMILIES = new Set(['oneDecade', 'mult5', 'sameDigit'])
 
 /**
  * Combinations with at least `minPairs` adjacent pairs (values differing by 1).
@@ -817,6 +910,12 @@ function presetEliminations(draws: Draw[], K: number, D: number, universe: numbe
     'Any tight cluster, wherever it sits — 12-14-15-18-21 as much as 1-2-3-4-5.')
   add('digit4', 'Four share a last digit', sameDigitCount(K, D), digit4,
     'The 7-17-27-37 family, for every digit.')
+
+  for (const fam of structuralFamilies(K, D)) {
+    let seen = 0
+    for (const d of draws) if (fam.test(d.sorted)) seen++
+    add(fam.key, fam.label, fam.combos, seen, fam.note)
+  }
 
   add('dates', `Every number ≤ ${dateMax}`, choose(dateMax, D), allDates,
     'The calendar zone. Not rare — but heavily played, because birthdays live here. Sharing risk, not drawing risk.')
@@ -1218,6 +1317,7 @@ export function reducedPoolAcceptor(
   const passesMode = modePredicate(lab, mode)
   const D = lab.drawSize
   const rec = lab.sumRecord
+  const families = structuralFamilies(lab.K, D).filter((f) => CUT_FAMILIES.has(f.key))
   return (sorted: number[]): boolean => {
     if (sorted[D - 2] <= 5 || sorted[D - 1] <= 9) return false
     let adj = 0
@@ -1227,6 +1327,7 @@ export function reducedPoolAcceptor(
       if (i > 0 && sorted[i] - sorted[i - 1] === 1) adj++
     }
     if (adj >= 3) return false
+    for (const fam of families) if (fam.test(sorted)) return false
     // Totals at or beyond the era's records are cut — deliberately including
     // the record draws themselves, and the ledger charges those two winners.
     if (rec && (total <= rec.min || total >= rec.max)) return false
@@ -1336,6 +1437,31 @@ export function reductionLedger(
   }
   const top9 = Array.from({ length: Math.min(9, K) }, (_, i) => i + 1)
   for (const combo of kSubsets(top9, D)) addCombo([...combo])
+  // Structural families safe enough to cut: enumerated so their overlap with
+  // everything above is exact rather than estimated.
+  const cutFams = structuralFamilies(K, D).filter((f) => CUT_FAMILIES.has(f.key))
+  if (cutFams.length) {
+    const walk = (start: number, pick: number[]) => {
+      if (pick.length === D) {
+        for (const f of cutFams) if (f.test(pick)) { addCombo([...pick]); return }
+        return
+      }
+      for (let v = start; v <= K - (D - pick.length) + 1; v++) {
+        pick.push(v)
+        walk(v + 1, pick)
+        pick.pop()
+      }
+    }
+    // Only the decades, multiples and digit runs can qualify, so walking each
+    // family's own members is far cheaper than the whole universe.
+    const decadeOf = (n: number) => Math.floor((n - 1) / 10)
+    const groups: number[][] = []
+    for (let d = 0; d <= decadeOf(K); d++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => decadeOf(n) === d))
+    for (let g = 0; g <= 9; g++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 10 === g))
+    groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 5 === 0))
+    for (const g of groups) for (const combo of kSubsets(g, D)) addCombo([...combo])
+    void walk
+  }
   // Three or more touching pairs — 62-63-64-65-66, 1-63-64-65-66, 1-2-3-65-66
   // and every straight run all belong to this one family
   for (const combo of clusteredCombos(K, D)) addCombo(combo)
@@ -1346,7 +1472,7 @@ export function reductionLedger(
     if (!passesMode(combo)) continue
     familySurvivors++
   }
-  push('families', `Clustered and never-seen families (three or more touching pairs, every 1-2-3-4-x, all inside 1–9) not already cut`,
+  push('families', 'Never-seen families — touching runs, one decade, one last digit, all multiples of five, every 1-2-3-4-x — not already cut',
     familySurvivors * sk,
     'cost 0 tested winners here — these shapes never once appeared', true)
 

@@ -5,7 +5,8 @@ import {
 } from '../engine/constraints.ts'
 import {
   adjacencyAtLeast, analyzeConstraints, clusteredCombos, countRthAtMost, MIN_CONSTRAINT_HISTORY,
-  reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, sumAtMostCount, sumBoundedCombos, windowCount,
+  CUT_FAMILIES, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
+  sumAtMostCount, sumBoundedCombos, windowCount,
 } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
 import { choose } from '../engine/odds.ts'
@@ -655,5 +656,58 @@ describe('the deep cut and the record-total boundary', () => {
       shape, exclude: pastKeys, accept, trials: 60,
     })
     for (const t of pf.tickets) expect(accept(t.numbers)).toBe(true)
+  })
+})
+
+describe('screening new pattern families', () => {
+  it('counts every structural family exactly, against brute force', () => {
+    const k = 24, d = 4
+    const fams = structuralFamilies(k, d)
+    const brute = new Map(fams.map((f) => [f.key, 0]))
+    for (let a = 1; a <= k - 3; a++)
+      for (let b = a + 1; b <= k - 2; b++)
+        for (let c = b + 1; c <= k - 1; c++)
+          for (let e = c + 1; e <= k; e++) {
+            const s = [a, b, c, e]
+            for (const f of fams) if (f.test(s)) brute.set(f.key, brute.get(f.key)! + 1)
+          }
+    for (const f of fams) expect(f.combos).toBe(brute.get(f.key))
+  })
+
+  it('cuts only families that are tiny and unseen, and keeps the rest', () => {
+    // 3-19-35-51-67 fell on 2026-04-29: evenly spaced is 561 of 11.2M
+    // combinations and it still happened, so it must never be cut.
+    const fams = structuralFamilies(K, D)
+    const cut = fams.filter((f) => CUT_FAMILIES.has(f.key))
+    const kept = fams.filter((f) => !CUT_FAMILIES.has(f.key))
+    expect(cut.map((f) => f.key).sort()).toEqual(['mult5', 'oneDecade', 'sameDigit'])
+    for (const f of cut) expect(f.combos / choose(K, D)).toBeLessThan(0.0002)
+    expect(kept.find((f) => f.key === 'evenSpaced')!.test([3, 19, 35, 51, 67])).toBe(true)
+
+    const draws = fairDraws(900, 4711)
+    const lab = analyzeConstraints(draws, K, D)!
+    const balanced = lab.modes.find((m) => m.key === 'balanced')!
+    const accept = reducedPoolAcceptor(lab, balanced, new Set())
+    expect(accept([41, 43, 46, 47, 49])).toBe(false)   // one decade
+    expect(accept([10, 25, 40, 55, 65])).toBe(false)   // multiples of five
+    expect(accept([7, 17, 27, 37, 47])).toBe(false)    // one last digit
+    expect(accept([3, 19, 35, 51, 67])).toBe(true)     // evenly spaced — it happened
+  })
+
+  it('rejects sliced floors, and the break rate tracks how thin the slice is', () => {
+    const base = fairDraws(1200, 8123)
+    const draws = base.map((d, i) => ({ ...d, special: 1 + (i * 7) % 26 }))
+    const lab = analyzeConstraints(draws, K, D)!
+    expect(lab.rejected.length).toBeGreaterThan(0)
+    const perBall = lab.rejected.find((r) => r.label.includes('bonus ball'))!
+    expect(perBall.rate).toBeGreaterThan(0.02)
+    // Every rejected rule must beat the pooled floor's break rate by design,
+    // and the thinnest slice must be the worst offender.
+    expect(lab.rejected[0].rate).toBeGreaterThanOrEqual(lab.rejected[lab.rejected.length - 1].rate)
+    for (const r of lab.rejected) {
+      expect(r.broke).toBeGreaterThan(0)
+      expect(r.chances).toBeGreaterThan(100)
+      expect(r.note).toMatch(/draws behind each floor/)
+    }
   })
 })
