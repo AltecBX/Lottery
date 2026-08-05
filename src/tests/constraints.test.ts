@@ -6,7 +6,7 @@ import {
 import {
   adjacencyAtLeast, analyzeConstraints, clusteredCombos, countRthAtMost, MIN_CONSTRAINT_HISTORY,
   CUT_FAMILIES, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
-  sumAtMostCount, sumBoundedCombos, windowCount,
+  positionBandCount, sumAtMostCount, sumBoundedCombos, windowCount,
 } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
 import { choose } from '../engine/odds.ts'
@@ -709,5 +709,72 @@ describe('screening new pattern families', () => {
       expect(r.chances).toBeGreaterThan(100)
       expect(r.note).toMatch(/draws behind each floor/)
     }
+  })
+})
+
+describe('testing the machine rather than the rules', () => {
+  it('counts joint position bands exactly, against brute force', () => {
+    const k = 20, d = 4
+    const lo = [1, 3, 6, 10]
+    const hi = [8, 12, 16, 20]
+    let brute = 0
+    for (let a = 1; a <= k - 3; a++)
+      for (let b = a + 1; b <= k - 2; b++)
+        for (let c = b + 1; c <= k - 1; c++)
+          for (let e = c + 1; e <= k; e++) {
+            const s = [a, b, c, e]
+            if (s.every((n, i) => n >= lo[i] && n <= hi[i])) brute++
+          }
+    expect(positionBandCount(k, d, lo, hi)).toBe(brute)
+    // Bands covering everything keep the whole space
+    expect(positionBandCount(k, d, [1, 1, 1, 1], [k, k, k, k])).toBe(choose(k, d))
+  })
+
+  it('passes every fairness test on data generated to be fair', () => {
+    // The bonus ball has to be drawn, not dealt round-robin: a perfect cycle
+    // gives chi-square ≈ 0, which the test correctly reads as too even to be
+    // random and flags at −3.5σ. Real randomness is lumpier than that.
+    let a = 424242
+    const roll = () => {
+      a = (a + 0x6d2b79f5) >>> 0
+      let t = Math.imul(a ^ (a >>> 15), 1 | a)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+    const draws = fairDraws(1400, 90909).map((d) => ({ ...d, special: 1 + Math.floor(roll() * 26) }))
+    const lab = analyzeConstraints(draws, K, D)!
+    expect(lab.fairness.length).toBeGreaterThanOrEqual(5)
+    for (const f of lab.fairness) {
+      expect(Math.abs(f.z)).toBeLessThan(3)
+      expect(f.verdict).toBe('as expected')
+    }
+    // The uniformity test is the one that decides the rest, so name it
+    expect(lab.fairness.some((f) => f.key === 'uniform')).toBe(true)
+  })
+
+  it('catches a bonus pool that comes out too evenly to be random', () => {
+    // Dealt in strict rotation rather than drawn: every value appears the same
+    // number of times, chi-square collapses to nothing, and that is as much a
+    // failure of randomness as a jammed ball is.
+    const draws = fairDraws(1300, 7788).map((d, i) => ({ ...d, special: 1 + (i * 11) % 26 }))
+    const lab = analyzeConstraints(draws, K, D)!
+    const bonus = lab.fairness.find((f) => f.key === 'bonus')!
+    expect(bonus.z).toBeLessThan(-3)
+    expect(bonus.verdict).toBe('off the line')
+  })
+
+  it('catches a machine that is not fair', () => {
+    // Ball 7 jammed into every draw: the frequency test must light up, and so
+    // must the whole-combination test, since the space is no longer uniform.
+    const base = fairDraws(1400, 5309)
+    const rigged = base.map((d) => {
+      const s = [...new Set([7, ...d.sorted.slice(1)])].sort((a, b) => a - b)
+      while (s.length < D) s.push(s[s.length - 1] + 1)
+      return { ...d, numbers: s, sorted: s }
+    })
+    const lab = analyzeConstraints(rigged, K, D)!
+    const balls = lab.fairness.find((f) => f.key === 'balls')!
+    expect(balls.z).toBeGreaterThan(3)
+    expect(balls.verdict).toBe('off the line')
   })
 })

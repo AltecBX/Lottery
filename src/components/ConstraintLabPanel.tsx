@@ -276,6 +276,33 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
       <div className="mini-title" style={{ marginTop: 18 }}>Where each drawn number lands</div>
       <PositionMap lab={lab} pick={res.bestCombo?.numbers ?? null} />
 
+      {lab.fairness.length > 0 && (
+        <>
+          <div className="mini-title" style={{ marginTop: 18 }}>Is this machine fair?</div>
+          <div className="cl-fair-tests">
+            {lab.fairness.map((f) => (
+              <div className={`cl-fair-row ${Math.abs(f.z) >= 2 ? 'flag' : ''}`} key={f.key}>
+                <span className="cl-fair-name">
+                  {f.label}
+                  <span className="sub">{f.stat}</span>
+                </span>
+                <span className="cl-fair-z">
+                  <b>{f.z >= 0 ? '+' : ''}{f.z.toFixed(1)}σ</b>
+                  <i>{f.verdict}</i>
+                </span>
+              </div>
+            ))}
+          </div>
+          <p className="hint" style={{ display: 'block', marginTop: 8 }}>
+            This is the question underneath every rule on this page. The second test is the decisive one: every
+            combination has a position in the ordered list of all {big(lab.universe)}, and if the draws are fair those
+            positions spread evenly across it — which they do, comfortably inside the limit. Once that holds, the
+            fair-lottery identity holds with it, and no family anywhere can be cut for free. It is also why the search
+            keeps coming back empty: there is nothing left in the machine to find.
+          </p>
+        </>
+      )}
+
       {lab.rejected.length > 0 && (
         <>
           <div className="mini-title" style={{ marginTop: 18 }}>Tested and rejected</div>

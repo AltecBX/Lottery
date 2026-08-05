@@ -133,6 +133,13 @@ export interface ConstraintLab {
   }[]
   /** Sorted-spreadsheet shapes priced exactly: combos, share, expected vs observed */
   presets: PresetElimination[]
+  /**
+   * Tests of the machine rather than of any one rule. If combinations really do
+   * come out uniformly, every family is priced fairly by necessity and no
+   * further searching can turn one up — so this is the question that decides
+   * whether the search is worth continuing.
+   */
+  fairness: { key: string; label: string; stat: string; z: number; verdict: string }[]
   /** Record totals in the era's own draws — the sum cut's boundaries */
   sumRecord: { min: number; max: number; minDate: string; maxDate: string } | null
   /**
@@ -540,7 +547,7 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
     }
   })
 
-  const presets = presetEliminations(draws, K, D, universe)
+  const presets = presetEliminations(draws, K, D, universe, positionBands.map((b) => ({ lo: b.lo, hi: b.hi })))
   let sumRecord: ConstraintLab['sumRecord'] = null
   for (const d of draws) {
     const total = d.sorted.reduce((a, b) => a + b, 0)
@@ -612,6 +619,8 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
   }
   rejected.sort((a, b) => b.rate - a.rate)
 
+  const fairness = fairnessTests(draws, K, D, universe)
+
   const usableRules = rules.filter((r) => r.usable)
   const best = [...usableRules].sort((a, b) => b.edgeZ - a.edgeZ)[0]
   // Reporting the strongest rule's z-score without saying whether it cleared the
@@ -626,7 +635,7 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
   rules.sort((a, b) => Number(b.usable) - Number(a.usable) || b.edgeZ - a.edgeZ)
 
   return {
-    K, drawSize: D, universe, evaluated, eraTrim, positionBands, presets, sumRecord, rejected,
+    K, drawSize: D, universe, evaluated, eraTrim, positionBands, presets, sumRecord, rejected, fairness,
     rules, modes, pareto, sampleSize: sample.size, verdict,
   }
 }
@@ -808,6 +817,28 @@ export function* clusteredCombos(K: number, D: number): Generator<number[]> {
   }
 }
 
+/**
+ * Combinations whose r-th smallest lands inside [lo[r], hi[r]] for every r.
+ *
+ * Five position bands are one joint constraint, not five separate ones, and
+ * counting them needs a pass over the pool that tracks how many have been
+ * chosen so far — the closed forms for a single position do not compose.
+ */
+export function positionBandCount(K: number, D: number, lo: number[], hi: number[]): number {
+  let dp = new Float64Array(D + 1)
+  dp[0] = 1
+  for (let v = 1; v <= K; v++) {
+    const next = new Float64Array(D + 1)
+    for (let c = 0; c <= D; c++) {
+      if (!dp[c]) continue
+      next[c] += dp[c]
+      if (c < D && v >= lo[c] && v <= hi[c]) next[c + 1] += dp[c]
+    }
+    dp = next
+  }
+  return Math.round(dp[D])
+}
+
 /** Combinations of D from 1..K whose values sum to at most `s` — exact, by DP. */
 export function sumAtMostCount(K: number, D: number, s: number): number {
   const maxSum = ((2 * K - D + 1) * D) / 2
@@ -853,7 +884,12 @@ export function sameDigitCount(K: number, D: number): number {
  * player could ever feel: the winner had the same near-zero chance of being
  * there in the first place.
  */
-function presetEliminations(draws: Draw[], K: number, D: number, universe: number): PresetElimination[] {
+const fmtBand = (lo: number[], hi: number[]): string => lo.map((l, i) => `${l}-${hi[i]}`).join(' / ')
+
+function presetEliminations(
+  draws: Draw[], K: number, D: number, universe: number,
+  bands?: { lo: number; hi: number }[],
+): PresetElimination[] {
   const n = draws.length
   const out: PresetElimination[] = []
   const add = (key: string, label: string, combos: number, observed: number, note: string) => {
@@ -935,6 +971,19 @@ function presetEliminations(draws: Draw[], K: number, D: number, universe: numbe
     let seen = 0
     for (const d of draws) if (fam.test(d.sorted)) seen++
     add(fam.key, fam.label, fam.combos, seen, fam.note)
+  }
+
+  // The five walk-forward position bands, priced as the single joint rule they
+  // are. Worth showing because it is the largest cut anyone reaches for by
+  // reading a sorted sheet — and it lands exactly on its own share.
+  if (bands && bands.length === D) {
+    const lo = bands.map((b) => b.lo)
+    const hi = bands.map((b) => b.hi)
+    let insideBands = 0
+    for (const d of draws) if (d.sorted.every((n, i) => n >= lo[i] && n <= hi[i])) insideBands++
+    add('posBands', `Outside the ${fmtBand(lo, hi)} position bands`,
+      universe - positionBandCount(K, D, lo, hi), draws.length - insideBands,
+      'Five bands at once — the biggest cut a sorted sheet suggests, and it removes winners at exactly the rate it removes combinations.')
   }
 
   add('dates', `Every number ≤ ${dateMax}`, choose(dateMax, D), allDates,
@@ -1253,6 +1302,114 @@ function buildPareto(
     points.push({ spaceShare: shares.prefix[k], survival: res.survival, rules: k + 1 })
   }
   return points
+}
+
+/**
+ * Whether the machine is fair, tested eight ways.
+ *
+ * Every other measurement in this file asks whether one particular rule beats
+ * its own space share. This asks the question underneath all of them: are the
+ * combinations drawn uniformly at all? If they are, the fair-lottery identity
+ * holds by definition and no family anywhere can be cut for free — which makes
+ * this the test that decides whether hunting for more of them is worth doing.
+ *
+ * The third one carries the most weight. Every combination has a rank in the
+ * colex ordering of all C(K,D) of them, and under a uniform draw those ranks
+ * are uniform on [0,1); a Kolmogorov–Smirnov test against that is a single
+ * check of the whole hypothesis rather than of one slice through it.
+ */
+function fairnessTests(
+  draws: Draw[], K: number, D: number, universe: number,
+): ConstraintLab['fairness'] {
+  const N = draws.length
+  const out: ConstraintLab['fairness'] = []
+  if (N < 200) return out
+  const say = (z: number) => (Math.abs(z) < 2 ? 'as expected' : Math.abs(z) < 3 ? 'worth watching' : 'off the line')
+  const push = (key: string, label: string, stat: string, z: number) =>
+    out.push({ key, label, stat, z, verdict: say(z) })
+
+  // 1. Every ball equally likely
+  const cnt = new Array(K + 1).fill(0)
+  for (const d of draws) for (const n of d.sorted) cnt[n]++
+  const expected = (N * D) / K
+  let chi = 0
+  for (let n = 1; n <= K; n++) chi += (cnt[n] - expected) ** 2 / expected
+  push('balls', 'Every number equally likely', `${cnt.slice(1).reduce((a, b) => Math.min(a, b))}–${cnt.slice(1).reduce((a, b) => Math.max(a, b))} times each, expected ${expected.toFixed(0)}`,
+    (chi - (K - 1)) / Math.sqrt(2 * (K - 1)))
+
+  // 2. The whole combination, uniform across the entire space
+  const ranks = draws
+    .map((d) => {
+      let r = 0
+      for (let i = 0; i < D; i++) r += choose(d.sorted[i] - 1, i + 1)
+      return r / universe
+    })
+    .sort((a, b) => a - b)
+  let ks = 0
+  for (let i = 0; i < N; i++) {
+    ks = Math.max(ks, Math.abs(ranks[i] - i / N), Math.abs((i + 1) / N - ranks[i]))
+  }
+  // KS converts to a comparable scale: 1.36/√N is the 5% point, i.e. |z| = 2
+  push('uniform', 'Whole combinations spread evenly over all ' + universe.toLocaleString(),
+    `largest gap from uniform ${(ks * 100).toFixed(2)}%, 5% limit ${((1.36 / Math.sqrt(N)) * 100).toFixed(2)}%`,
+    (ks / (1.36 / Math.sqrt(N))) * 2)
+
+  // 3. One draw says nothing about the next
+  const sums = draws.map((d) => d.sorted.reduce((a, b) => a + b, 0))
+  const mean = sums.reduce((a, b) => a + b, 0) / N
+  let num = 0
+  let den = 0
+  for (let i = 0; i < N; i++) {
+    den += (sums[i] - mean) ** 2
+    if (i) num += (sums[i] - mean) * (sums[i - 1] - mean)
+  }
+  const r1 = den > 0 ? num / den : 0
+  push('serial', 'Each draw independent of the one before', `sum correlation ${r1.toFixed(3)}`, r1 * Math.sqrt(N))
+
+  // 4. Numbers carried over from the previous draw
+  let rep = 0
+  for (let i = 1; i < N; i++) {
+    for (const n of draws[i].sorted) if (draws[i - 1].sorted.includes(n)) rep++
+  }
+  const eRep = (D * D) / K
+  const vRep = (eRep * (1 - D / K)) / (N - 1)
+  push('repeat', 'Numbers held over from the last draw',
+    `${(rep / (N - 1)).toFixed(3)} per draw, expected ${eRep.toFixed(3)}`,
+    (rep / (N - 1) - eRep) / Math.sqrt(Math.max(1e-9, vRep)))
+
+  // 5. How long a number waits between appearances
+  const last = new Array(K + 1).fill(-1)
+  const gaps: number[] = []
+  draws.forEach((d, i) => {
+    for (const n of d.sorted) {
+      if (last[n] >= 0) gaps.push(i - last[n])
+      last[n] = i
+    }
+  })
+  if (gaps.length > 50) {
+    const gm = gaps.reduce((a, b) => a + b, 0) / gaps.length
+    const eGap = K / D
+    push('gaps', 'How long a number waits to return',
+      `${gm.toFixed(1)} draws on average, expected ${eGap.toFixed(1)}`,
+      (gm - eGap) / (Math.sqrt(eGap * (eGap - 1)) / Math.sqrt(gaps.length)))
+  }
+
+  // 6. The bonus ball, on its own machine
+  const withSpecial = draws.filter((d) => d.special !== undefined)
+  if (withSpecial.length > 200) {
+    let sk = 0
+    for (const d of withSpecial) sk = Math.max(sk, d.special!)
+    if (sk >= 2) {
+      const sc = new Array(sk + 1).fill(0)
+      for (const d of withSpecial) sc[d.special!]++
+      const es = withSpecial.length / sk
+      let schi = 0
+      for (let n = 1; n <= sk; n++) schi += (sc[n] - es) ** 2 / es
+      push('bonus', 'Every bonus ball equally likely', `${sk} values, expected ${es.toFixed(0)} each`,
+        (schi - (sk - 1)) / Math.sqrt(2 * (sk - 1)))
+    }
+  }
+  return out
 }
 
 /* ───────────────────────── the reduction ledger ───────────────────────── */
