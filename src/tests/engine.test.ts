@@ -5,13 +5,16 @@ import { HistoryState } from '../engine/state.ts'
 import { isotonicDecreasing, runBacktest } from '../engine/backtest.ts'
 import { analyzeRepeats } from '../engine/repeats.ts'
 import { analyzePositions, orderStatPmf, positionalFit } from '../engine/positions.ts'
-import { topIndices, topIndicesPartial } from '../engine/signals.ts'
+import { computeRawSignals, signalKeys, topIndices, topIndicesPartial } from '../engine/signals.ts'
 import { runEngine } from '../engine/engine.ts'
 import { detectEra, drawsForEra } from '../engine/era.ts'
 import { generateSampleDraws } from '../engine/sample.ts'
 import { choose, hitDistribution, jackpotOdds, matchOdds } from '../engine/odds.ts'
 import { attachSales, parseSalesRows, parseSocrataRows } from '../engine/sync.ts'
 import { analyzeJackpots, projectNextJackpot, ticketValue, US_LOWER_TIERS } from '../engine/jackpot.ts'
+import { scorePortfolio } from '../engine/portfolio.ts'
+import { gradeTicket } from '../engine/ticket.ts'
+import { topFollowers, weekdaySignificance } from '../engine/analytics.ts'
 import { countdownTo, drawTimeLabel, formatCountdown, nextDrawInstant } from '../engine/drawtime.ts'
 import { createGame, daysSinceLastDraw, migrateLegacy } from '../engine/games.ts'
 import { DEFAULT_SETTINGS } from '../engine/types.ts'
@@ -676,6 +679,87 @@ describe('weekday significance', () => {
   })
 })
 
+describe('audited fixes', () => {
+  it('counts the jackpot itself as a prize in the portfolio simulation', () => {
+    // The jackpot tier lives outside the prize table, so before the fix a
+    // trial that matched everything scored pAnyPrize = 0 — the one outcome the
+    // whole exercise is about fell through the lookup.
+    const tiers = [{ match: 4, withSpecial: false, prize: 100, label: '4' }]
+    const sure = scorePortfolio([{ numbers: [1, 2, 3, 4, 5], special: 1 }], 5, 5, 1, 500, 7, tiers)
+    expect(sure.pAnyPrize).toBe(1)
+    const noBonus = scorePortfolio([{ numbers: [1, 2, 3, 4, 5, 6] }], 6, 6, 0, 500, 7, tiers)
+    expect(noBonus.pAnyPrize).toBe(1)
+  })
+
+  it('grades an all-mains ticket with no recorded bonus at the floor, not the jackpot', () => {
+    const draw: Draw = { date: '2026-01-01', dow: 4, numbers: [1, 2, 3, 4, 5], sorted: [1, 2, 3, 4, 5], special: 7, jackpot: 300e6 }
+    const g = gradeTicket({ numbers: [1, 2, 3, 4, 5], savedAt: '', forDate: '2026-01-01' } as never, draw, 5)
+    expect(g.jackpot).toBe(false)
+    expect(g.prize).toBe(1e6) // the 5-of-5-without-bonus tier
+    // With the bonus recorded and matched, the jackpot grades as before
+    const g2 = gradeTicket({ numbers: [1, 2, 3, 4, 5], special: 7, savedAt: '', forDate: '2026-01-01' } as never, draw, 5)
+    expect(g2.jackpot).toBe(true)
+  })
+
+  it('keeps the follower table empty on fair data now that the bar prices the search', () => {
+    // ~K² hypotheses are scanned, so a lift cutoff filled all twelve rows with
+    // noise on a fair generator. A binomial z ≥ 4 expects ~0.15 false rows.
+    const state = new HistoryState(49, 6)
+    for (const d of fairRandomDraws(11, 900, 49, 6)) state.push(d)
+    expect(topFollowers(state).length).toBeLessThanOrEqual(1)
+  })
+
+  it('no longer offers a per-number position signal — it was frequency in disguise', () => {
+    // Σ_p posCounts[p][i] = counts[i], so the summed form z-normalized to
+    // exactly freqAll (max |Δz| = 1.3e-15 on real data). No repair exists:
+    // P(i appears) = Σ_p P(position p = i) by definition, so every per-number
+    // statistic built from positional counts collapses to the marginal — this
+    // very test proved it for the max form on disjoint position bands before
+    // the signal was removed. Positional shape lives at the combination level
+    // in positions.ts instead.
+    const state = new HistoryState(65, 5)
+    let seed = 31
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
+    for (let t = 0; t < 400; t++) {
+      const nums = Array.from({ length: 5 }, (_, p) => 1 + 13 * p + Math.floor(rnd() * 13))
+      const date = `2020-01-${String(1 + (t % 28)).padStart(2, '0')}`
+      state.push({ date, dow: t % 7, numbers: nums, sorted: [...nums].sort((a, b) => a - b) })
+    }
+    const ctx = { targetDow: 3, prev: state.history[state.history.length - 1] }
+    const raws = computeRawSignals(state, ctx, true)
+    expect(raws.some((r) => r.key === 'position')).toBe(false)
+    expect(signalKeys(true)).not.toContain('position')
+    expect(signalKeys(true)).toEqual(signalKeys(false))
+  })
+
+  it('excludes draw 0 from the repeat signal\'s "appeared unprompted" count', () => {
+    // Number 1 appears only in draw 0, which followed nothing: zero of its
+    // appearances came after a 1-free draw. The old count said one did.
+    const mk = (nums: number[], i: number): Draw => ({ date: `2020-02-0${i + 1}`, dow: i, numbers: nums, sorted: nums })
+    const state = new HistoryState(69, 5)
+    const h = [mk([1, 2, 3, 4, 5], 0), mk([10, 11, 12, 13, 14], 1), mk([20, 21, 22, 23, 24], 2)]
+    for (const d of h) state.push(d)
+    const raws = computeRawSignals(state, { targetDow: 3, prev: h[2] }, false)
+    const repeat = raws.find((r) => r.key === 'repeat')!.raw
+    const p = state.rate(1, 20)
+    // (misses + 25p) / (opportunities + 25) with misses = 0, opportunities = 1
+    expect(repeat[1]).toBeCloseTo((0 + 25 * p) / (1 + 25), 12)
+  })
+
+  it('calibrates the weekday chi-square for sampling without replacement', () => {
+    // Counts on a weekday are negatively correlated (each draw places D numbers
+    // without replacement), so the raw statistic averages K−D, not K−1. After
+    // rescaling, fair data must average near the stated dof.
+    const state = new HistoryState(49, 6)
+    for (const d of fairRandomDraws(23, 1200, 49, 6)) state.push(d)
+    const tests = weekdaySignificance(state, [0, 1, 2, 3, 4, 5, 6].filter((x) => state.drawsByDow[x] >= 20))
+    expect(tests.length).toBeGreaterThan(0)
+    const meanZ = tests.reduce((a, t) => a + t.z, 0) / tests.length
+    expect(Math.abs(meanZ)).toBeLessThan(1)
+    for (const t of tests) expect(t.dof).toBe(48)
+  })
+})
+
 describe('odds math', () => {
   it('reproduces the published Powerball odds', () => {
     expect(choose(69, 5)).toBe(11238513)
@@ -821,9 +905,18 @@ describe('era detection', () => {
     const current = runEngine(drawsForEra(draws, 'current', detectEra(draws)), DEFAULT_SETTINGS)
     expect(all.special!.K).toBe(26)
     expect(current.special!.K).toBe(26)
-    // Analysing everything still analyses everything — only the pool is pinned.
-    expect(current.drawCount).toBeLessThan(all.drawCount)
-    expect(all.drawCount).toBe(900)
+    // The learning scopes to the era too, whichever window came in. This test
+    // used to pin the opposite ("analysing everything still analyses
+    // everything"), until it was measured on the real history: training across
+    // the 2015 boundary biased the model against 60–69 (1.19 in its era top-10s
+    // where unbiased is 1.45) and cost real accuracy on the current machine
+    // (0.724 hits per draw against 0.772 era-trained). Old-era draws still feed
+    // repeat-watch and the already-drawn exclusions — combinations stay valid
+    // when a pool grows — but not the distributional models.
+    expect(all.drawCount).toBe(current.drawCount)
+    expect(all.drawCount).toBeLessThan(900)
+    expect(all.drawCount).toBeGreaterThanOrEqual(440)
+    expect(all.backtest.evaluated).toBe(current.backtest.evaluated)
   }, 30000)
 
   it('scopes the analysis itself when the main pool shrank', () => {
