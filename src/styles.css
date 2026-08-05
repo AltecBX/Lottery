@@ -1175,7 +1175,7 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   background: color-mix(in srgb, var(--card) 70%, transparent);
 }
 .cl-pos-track .mark { top: 0; width: 3px; height: 16px; margin-left: -1.5px; background: var(--gold); }
-.cl-pos-track .mark.out { background: var(--bad-text); }
+.cl-pos-track .mark.out { background: var(--overdue); }
 .cl-pos-range { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; text-align: right; }
 /* Inset to sit under the track column: 26+9 on the left, 58+9 on the right. */
 .cl-pos-scale {
@@ -1194,7 +1194,7 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 .cl-ledger-label { font-size: 13px; font-weight: 600; min-width: 0; }
 .cl-ledger-label .sub { display: block; font-weight: 500; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
 .cl-ledger-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; }
-.cl-ledger-num i { display: block; font-style: normal; font-size: 12px; color: var(--bad-text); }
+.cl-ledger-num i { display: block; font-style: normal; font-size: 12px; color: var(--muted); }
 .cl-ledger-num b { font-size: 13.5px; }
 .cl-ledger-start { background: color-mix(in srgb, var(--ink) 4%, transparent); }
 .cl-ledger-start .cl-ledger-num b { font-size: 15px; }
@@ -1265,8 +1265,8 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 .cl-inspect .balls { display: flex; gap: 5px; flex-wrap: wrap; }
 .cl-verdict { font-size: 12.5px; font-weight: 640; }
 .cl-verdict.ok { color: var(--good-text); }
-.cl-verdict.no { color: var(--bad-text); }
-.cl-fails { margin-top: 7px; font-size: 12.5px; color: var(--bad-text); display: grid; gap: 2px; }
+.cl-verdict.no { color: var(--ink-2); }
+.cl-fails { margin-top: 7px; font-size: 12.5px; color: var(--ink-2); display: grid; gap: 2px; }
 
 .cl-elim { display: grid; gap: 7px; }
 .cl-elim-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12.5px; }
@@ -1320,8 +1320,10 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 }
 .play-card .next-draw { padding: 12px 14px; }
 
-.cl-rejected { border-color: color-mix(in srgb, var(--bad-text) 40%, var(--border)); }
-.cl-preset-combos.bad { color: var(--bad-text); font-weight: 640; }
+/* A rejected rule is the lab doing its job, not a fault, so it reads as a
+   neutral note rather than an error. Red is reserved for something wrong. */
+.cl-rejected { border-color: var(--border); background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.cl-preset-combos.bad { color: var(--ink-2); font-weight: 640; }
 .play-actions .btn.ghost { flex: 0 1 auto; }
 
 /* ---------- Weather chip ---------- */
