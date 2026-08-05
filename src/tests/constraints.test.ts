@@ -5,7 +5,7 @@ import {
 } from '../engine/constraints.ts'
 import {
   adjacencyAtLeast, analyzeConstraints, clusteredCombos, countRthAtMost, MIN_CONSTRAINT_HISTORY,
-  CUT_FAMILIES, MAX_CUT_STEP, narrowGroups, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
+  CHOSEN_CUTS, CUT_FAMILIES, MAX_CUT_STEP, narrowGroups, POOL_CUTS, poolWalkForward, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
   positionBandCount, sumAtMostCount, sumBoundedCombos, windowCount,
 } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
@@ -754,6 +754,63 @@ describe('screening new pattern families', () => {
       const hit = cut.filter((f) => f.test(combo)).map((f) => f.key)
       expect({ date, cutBy: hit }).toEqual({ date, cutBy: [] })
     }
+  })
+
+  it('keeps the chosen cuts separate from the evidence-based ones', () => {
+    // CUT_FAMILIES carries a claim — never drawn. CHOSEN_CUTS carries a price,
+    // and the price is a real draw. Collapsing the two would silently upgrade a
+    // decision into a finding, so the split is asserted rather than commented.
+    for (const k of CHOSEN_CUTS.keys()) expect(CUT_FAMILIES.has(k)).toBe(false)
+    expect([...CHOSEN_CUTS.keys()].sort()).toEqual(['mult5', 'oneDecade', 'tightSpan'])
+    expect(POOL_CUTS.size).toBe(CUT_FAMILIES.size + CHOSEN_CUTS.size)
+
+    // Each chosen cut must actually contain the draw it names as its cost.
+    const fams = structuralFamilies(K, D)
+    const owns: [string, number[]][] = [
+      ['oneDecade', [2, 5, 6, 9, 10]],
+      ['mult5', [5, 15, 25, 30, 40]],
+      ['tightSpan', [44, 45, 47, 50, 51]],
+    ]
+    for (const [key, combo] of owns) {
+      expect(fams.find((f) => f.key === key)!.test(combo)).toBe(true)
+      expect(CHOSEN_CUTS.get(key)).toContain(combo.join('-'))
+    }
+    // Three touching pairs has been drawn three times, not once — it stays out.
+    expect(CHOSEN_CUTS.has('clustered')).toBe(false)
+    expect(POOL_CUTS.has('clustered')).toBe(false)
+  })
+
+  it('replays the pool without letting any draw see its own answer', () => {
+    const draws = fairDraws(1200, 90210)
+    const lab = analyzeConstraints(draws, K, D)!
+    const deep = lab.modes.find((m) => m.key === 'deep')!
+    const verdicts = poolWalkForward(lab, deep, draws)
+    expect(verdicts.length).toBe(lab.evaluated)
+    expect(new Set(verdicts.map((v) => v.date)).size).toBe(verdicts.length)
+    for (const v of verdicts) expect(v.kept).toBe(v.cutBy === null)
+
+    // On fair data the pool must hold winners at the rate it keeps space — that
+    // is the identity, and a replay that beat it would mean the replay leaks.
+    const held = verdicts.filter((v) => v.kept).length / verdicts.length
+    expect(Math.abs(held - deep.spaceShare)).toBeLessThan(0.06)
+
+    // The real guard: truncating the history must not change the verdicts that
+    // survive, because none of them may depend on a later draw.
+    const short = draws.slice(0, draws.length - 40)
+    const labShort = analyzeConstraints(short, K, D)!
+    const deepShort = labShort.modes.find((m) => m.key === 'deep')!
+    const byDate = new Map(poolWalkForward(labShort, deepShort, short).map((v) => [v.date, v]))
+    // Compare only the layers that cannot move: the bands are re-optimised on
+    // the shorter history, so the record-total and family verdicts are the ones
+    // that must be stable.
+    let compared = 0
+    for (const v of verdicts) {
+      const s = byDate.get(v.date)
+      if (!s || v.cutBy?.includes('bands') || s.cutBy?.includes('bands')) continue
+      expect({ date: v.date, cutBy: v.cutBy }).toEqual({ date: v.date, cutBy: s.cutBy })
+      compared++
+    }
+    expect(compared).toBeGreaterThan(100)
   })
 
   it('prices the narrow-set families from the same groups the ledger deducts', () => {
