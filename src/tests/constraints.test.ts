@@ -3,9 +3,10 @@ import {
   ConstraintState, contextAt, EMPTY_CONTEXT, extractFeatures, featureCount, featureSpecs,
   positionIntervalProbability, wilson,
 } from '../engine/constraints.ts'
-import { analyzeConstraints, MIN_CONSTRAINT_HISTORY, sampleUniverse } from '../engine/constraintlab.ts'
+import { analyzeConstraints, countRthAtMost, MIN_CONSTRAINT_HISTORY, sampleUniverse } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
 import { choose } from '../engine/odds.ts'
+import { buildPortfolio } from '../engine/portfolio.ts'
 import { dowOf } from '../engine/dates.ts'
 import type { Draw } from '../engine/types.ts'
 
@@ -399,5 +400,59 @@ describe('rule-era separation', () => {
     expect(lab).not.toBeNull()
     expect(lab!.K).toBe(70)
     expect(lab!.universe).toBe(choose(70, D))
+  })
+})
+
+describe('sorted-spreadsheet shapes, priced exactly', () => {
+  it('counts combinations with a small r-th number by brute force agreement', () => {
+    // Small enough to enumerate completely: K=12, D=3
+    const k = 12, d = 3
+    for (const r of [1, 2, 3]) {
+      for (const v of [2, 4, 6]) {
+        let brute = 0
+        for (let a = 1; a <= k - 2; a++)
+          for (let b = a + 1; b <= k - 1; b++)
+            for (let c = b + 1; c <= k; c++) {
+              const sorted = [a, b, c]
+              if (sorted[r - 1] <= v) brute++
+            }
+        expect(countRthAtMost(k, d, r, v)).toBe(brute)
+      }
+    }
+  })
+
+  it('prices the shapes a sorted spreadsheet reveals, on the real Powerball geometry', () => {
+    const lab = analyzeConstraints(fairDraws(900, 606), K, D)!
+    const byKey = new Map(lab.presets.map((p) => [p.key, p]))
+    // "4th number 5 or under": 4 of 5 numbers inside 1..5
+    expect(byKey.get('pos4low')!.combos).toBe(5 * 64 + 1)
+    // "5th number 9 or under": all five inside 1..9
+    expect(byKey.get('pos5low')!.combos).toBe(choose(9, 5))
+    // one straight run anywhere in 1..69
+    expect(byKey.get('run')!.combos).toBe(69 - 5 + 1)
+    // the calendar zone
+    expect(byKey.get('dates')!.combos).toBe(choose(31, 5))
+    for (const p of lab.presets) {
+      expect(p.share).toBeCloseTo(p.combos / lab.universe, 12)
+      // On fair data the observed count must sit near what the share predicts —
+      // this is the whole "the draws mirror the space" claim, tested.
+      const sd = Math.sqrt(Math.max(p.expected, 0.05))
+      expect(Math.abs(p.observed - p.expected)).toBeLessThanOrEqual(4 * sd + 1)
+    }
+  })
+
+  it('never suggests an exact past jackpot when asked not to', () => {
+    const scores = new Float64Array(K + 1)
+    for (let n = 1; n <= K; n++) scores[n] = 1 + (K - n) * 0.01
+    const shape = { lo: [1, 2, 3, 4, 5], hi: [65, 66, 67, 68, 69], sumLo: 21, sumHi: 330 }
+    // Ban whatever it would otherwise pick first, then ban its next answer too
+    const free = buildPortfolio({ scores, K, D, specialK: 0, specialPicks: [], count: 3, spread: 0.5, shape, trials: 50 })
+    const banned = new Set(free.tickets.map((t) => t.numbers.join('-')))
+    const constrained = buildPortfolio({
+      scores, K, D, specialK: 0, specialPicks: [], count: 3, spread: 0.5, shape, exclude: banned, trials: 50,
+    })
+    for (const t of constrained.tickets) {
+      expect(banned.has(t.numbers.join('-'))).toBe(false)
+    }
   })
 })

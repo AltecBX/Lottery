@@ -121,6 +121,7 @@ const TICKET_TRIES = 1200
 function pickTicket(
   scores: Float64Array, K: number, D: number, used: Int32Array,
   fresh: number, shape: PortfolioShape | null, rnd: () => number,
+  exclude?: Set<string>,
 ): number[] {
   let hi = -Infinity
   let lo = Infinity
@@ -140,13 +141,16 @@ function pickTicket(
   const wantRepeat = Math.min(D - wantFresh, usedPool.length)
   const topUp = D - wantFresh - wantRepeat
 
+  const allowed = (sorted: number[]): boolean => !exclude?.has(sorted.join('-'))
   const byValue = (a: number, b: number) => scores[b] - scores[a] || a - b
   const greedy = [
     ...unusedPool.slice().sort(byValue).slice(0, wantFresh + topUp),
     ...usedPool.slice().sort(byValue).slice(0, wantRepeat),
   ].sort((a, b) => a - b)
   let best = greedy
-  let bestValue = !shape || inShape(greedy, shape) ? greedy.reduce((s, n) => s + scores[n], 0) : -Infinity
+  let bestValue = (!shape || inShape(greedy, shape)) && allowed(greedy)
+    ? greedy.reduce((s, n) => s + scores[n], 0)
+    : -Infinity
 
   if (shape) {
     const cand: number[] = []
@@ -158,7 +162,7 @@ function pickTicket(
       cand.length = 0
       cand.push(...partA, ...partB)
       cand.sort((a, b) => a - b)
-      if (!inShape(cand, shape)) continue
+      if (!inShape(cand, shape) || !allowed(cand)) continue
       let v = 0
       for (const n of cand) v += scores[n]
       if (v > bestValue) { bestValue = v; best = cand.slice() }
@@ -275,6 +279,13 @@ export interface PortfolioOptions {
   spread: number
   /** Keep suggested tickets to shapes this game actually produces */
   shape?: PortfolioShape | null
+  /**
+   * Combinations never to suggest, as sorted join('-') keys — the past
+   * jackpots. Not because they cannot repeat (each is exactly as likely as any
+   * other combination) but because a combination with a story attracts
+   * co-winners, and a shared jackpot pays less.
+   */
+  exclude?: Set<string>
   trials?: number
   seed?: number
   tiers?: PrizeTier[]
@@ -335,7 +346,7 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
     const fresh = t === 0
       ? D
       : Math.round((budget * t) / (count - 1)) - Math.round((budget * (t - 1)) / (count - 1))
-    const numbers = pickTicket(scores, K, D, used, fresh, shape, mulberry32(seed + t * 7919))
+    const numbers = pickTicket(scores, K, D, used, fresh, shape, mulberry32(seed + t * 7919), opts.exclude)
     const ticket: PortfolioTicket = { numbers }
     if (specialK > 0) {
       // At zero spread every ticket is one pick repeated, bonus ball included
@@ -346,7 +357,7 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
 
   // Same count, every ticket identical to the model's single best pick
   const topUsed = new Int32Array(K + 1)
-  const top = pickTicket(scores, K, D, topUsed, D, shape, mulberry32(seed))
+  const top = pickTicket(scores, K, D, topUsed, D, shape, mulberry32(seed), opts.exclude)
   const concentrated: PortfolioTicket[] = Array.from({ length: count }, () => {
     const t: PortfolioTicket = { numbers: top }
     if (specialK > 0) t.special = specialPicks[0] ?? 1

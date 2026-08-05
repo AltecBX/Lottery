@@ -5,6 +5,7 @@ import {
   type DrawContext, type FeatureSpec, type RuleTier,
 } from './constraints.ts'
 import { detectEra } from './era.ts'
+import { choose } from './odds.ts'
 
 /** Coverage ladder: each candidate rule is a feature at one of these tail sizes. */
 export const ALPHAS = [0.0005, 0.002, 0.01, 0.03]
@@ -130,6 +131,8 @@ export interface ConstraintLab {
     p75: number
     median: number
   }[]
+  /** Sorted-spreadsheet shapes priced exactly: combos, share, expected vs observed */
+  presets: PresetElimination[]
   /** Every candidate rule, best first */
   rules: ConstraintRule[]
   modes: ConstraintMode[]
@@ -530,6 +533,8 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
     }
   })
 
+  const presets = presetEliminations(draws, K, D, universe)
+
   const usableRules = rules.filter((r) => r.usable)
   const best = [...usableRules].sort((a, b) => b.edgeZ - a.edgeZ)[0]
   // Reporting the strongest rule's z-score without saying whether it cleared the
@@ -544,9 +549,98 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
   rules.sort((a, b) => Number(b.usable) - Number(a.usable) || b.edgeZ - a.edgeZ)
 
   return {
-    K, drawSize: D, universe, evaluated, eraTrim, positionBands,
+    K, drawSize: D, universe, evaluated, eraTrim, positionBands, presets,
     rules, modes, pareto, sampleSize: sample.size, verdict,
   }
+}
+
+/* ─────────────── the eliminations you can see by sorting ─────────────── */
+
+export interface PresetElimination {
+  key: string
+  label: string
+  /** Exact count of combinations with this shape */
+  combos: number
+  /** combos / universe */
+  share: number
+  /** What fairness predicts for this history: share × draws */
+  expected: number
+  /** How many draws in the era actually had the shape */
+  observed: number
+  note: string
+}
+
+/** Combinations whose r-th smallest number is ≤ v: at least r of the D inside 1..v. */
+export function countRthAtMost(K: number, D: number, r: number, v: number): number {
+  let total = 0
+  for (let j = r; j <= D; j++) total += choose(v, j) * choose(K - v, D - j)
+  return total
+}
+
+/**
+ * The shapes anyone finds by sorting a spreadsheet of past draws, each priced
+ * exactly.
+ *
+ * Sorting by a column and seeing "the 4th number is never under 6" feels like a
+ * discovery about the machine, and the whole point of this table is to show it
+ * is a discovery about counting: the 4th number staying at or under 5 needs four
+ * of the five numbers crammed into 1..5, and only 321 of the 11,238,513
+ * combinations manage it. The draws are not avoiding these shapes — there is
+ * almost nothing there to hit. That is why every `observed` below lands where
+ * `expected` says, and why removing all of them changes the odds by nothing a
+ * player could ever feel: the winner had the same near-zero chance of being
+ * there in the first place.
+ */
+function presetEliminations(draws: Draw[], K: number, D: number, universe: number): PresetElimination[] {
+  const n = draws.length
+  const out: PresetElimination[] = []
+  const add = (key: string, label: string, combos: number, observed: number, note: string) => {
+    const share = combos / universe
+    out.push({ key, label, combos, share, expected: share * n, observed, note })
+  }
+
+  // "The next-to-largest is never small" — needs D−1 numbers inside 1..5
+  const vLow = 5
+  let nextToLargestLow = 0
+  let largestLow = 0
+  let startsRun = 0
+  let allDates = 0
+  const vTop = Math.min(9, K - 1)
+  const dateMax = Math.min(31, K)
+  for (const d of draws) {
+    if (d.sorted[D - 2] <= vLow) nextToLargestLow++
+    if (d.sorted[D - 1] <= vTop) largestLow++
+    if (d.sorted[D - 1] - d.sorted[0] === D - 1) startsRun++
+    if (d.sorted[D - 1] <= dateMax) allDates++
+  }
+  add('pos4low', `Next-to-largest number ≤ ${vLow}`, countRthAtMost(K, D, D - 1, vLow), nextToLargestLow,
+    `Needs ${D - 1} of the ${D} numbers crammed into 1–${vLow}.`)
+  add('pos5low', `Largest number ≤ ${vTop}`, choose(vTop, D), largestLow,
+    `Needs every number inside 1–${vTop}.`)
+  add('run', `All ${D} consecutive`, K - D + 1, startsRun,
+    'The 1-2-3-4-5 family — one straight run anywhere in the pool.')
+  add('dates', `Every number ≤ ${dateMax}`, choose(dateMax, D), allDates,
+    'The calendar zone. Not rare — but heavily played, because birthdays live here. Sharing risk, not drawing risk.')
+
+  // Repeat of a past jackpot: the one elimination that grows with the history
+  const seen = new Set<string>()
+  let repeats = 0
+  for (const d of draws) {
+    const key = d.sorted.join('-')
+    if (seen.has(key)) repeats++
+    seen.add(key)
+  }
+  const expRepeats = (n * (n - 1)) / 2 / universe
+  out.push({
+    key: 'pastWinner',
+    label: 'Exact repeat of a past jackpot',
+    combos: seen.size,
+    share: seen.size / universe,
+    expected: expRepeats,
+    observed: repeats,
+    note: `With ${n.toLocaleString()} draws in ${universe.toLocaleString()} combinations, fairness expects ${expRepeats.toFixed(2)} repeats so far — none is unremarkable, and each past winner stays exactly as likely as any other combination.`,
+  })
+  return out
 }
 
 /** Each rule's accepted interval as it stood at every evaluated draw. */

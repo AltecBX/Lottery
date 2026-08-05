@@ -586,6 +586,7 @@ export default function App() {
               <PortfolioPanel
                 key={`p-${activeGame?.id}-${result.lastDate}`}
                 res={result}
+                draws={draws}
                 onSaveTicket={saveTicket}
               />
               <ConstraintLabPanel res={result} draws={draws} />
