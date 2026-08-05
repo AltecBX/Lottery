@@ -199,9 +199,43 @@ describe('portfolio coverage', () => {
     const spread = buildPortfolio(opts)
     const specials = spread.tickets.map((t) => t.special)
     expect(new Set(specials).size).toBe(5)
-    expect(specials.slice(0, 3)).toEqual([19, 3, 21])
+    // Consecutive entries of the ranked order, wherever the seed starts it.
+    const order = [19, 3, 21, ...Array.from({ length: 26 }, (_, i) => i + 1).filter((n) => ![19, 3, 21].includes(n))]
+    const at = order.indexOf(specials[0]!)
+    expect(at).toBeGreaterThanOrEqual(0)
+    expect(specials).toEqual([0, 1, 2, 3, 4].map((i) => order[(at + i) % order.length]))
     // matching the bonus alone already pays, so spread must not lose to a quick pick here
     expect(spread.stats.pAnyPrize).toBeGreaterThan(spread.concentrated.pAnyPrize)
+  })
+
+  it('re-deals every ticket when the seed changes, bonus balls included', () => {
+    /*
+     * The "Another five" bug. pickTicket seeded its search with the greedy
+     * top-scoring pick, and greedy IS the maximum, so no sampled candidate
+     * could ever beat it: any ticket whose greedy pick passed the shape test
+     * was frozen for every seed. On the live model that pinned tickets 1 and 2
+     * of 5 — the two at the top of the screen, so the button looked dead.
+     * The bonus balls were worse: indexed by ticket position alone, never by
+     * the seed.
+     */
+    const shape = { lo: [1, 2, 6, 13, 23], hi: [50, 58, 64, 68, 69], sumLo: 60, sumHi: 300 }
+    const deals = [1, 2, 3, 4, 5, 6].map((seed) =>
+      buildPortfolio({ ...opts, spread: 0.65, shape, seed, trials: 200 }).tickets)
+    for (let i = 0; i < 5; i++) {
+      const nums = new Set(deals.map((d) => d[i].numbers.join('-')))
+      const bonus = new Set(deals.map((d) => d[i].special))
+      expect({ ticket: i + 1, distinctNumberSets: nums.size > 1, distinctBonus: bonus.size > 1 })
+        .toEqual({ ticket: i + 1, distinctNumberSets: true, distinctBonus: true })
+    }
+    // and a re-deal must not smuggle in a shape the game does not produce
+    for (const d of deals) {
+      for (const t of d) {
+        expect(t.numbers.every((n, p) => n >= shape.lo[p] && n <= shape.hi[p])).toBe(true)
+        const sum = t.numbers.reduce((a, b) => a + b, 0)
+        expect(sum).toBeGreaterThanOrEqual(shape.sumLo)
+        expect(sum).toBeLessThanOrEqual(shape.sumHi)
+      }
+    }
   })
 
   it('collapses to a single repeated pick at zero spread', () => {
