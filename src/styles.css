@@ -1279,3 +1279,43 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   .cl-elim-date { min-width: 0; }
   .cl-rule-figs { gap: 10px; }
 }
+
+/* ---------- Play view ---------- */
+.play-grid { max-width: 640px; margin: 0 auto; }
+.play-card { display: grid; gap: 14px; }
+.play-tickets { display: grid; gap: 9px; }
+.play-ticket {
+  display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--border); border-radius: 14px; padding: 9px 11px;
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+.play-ticket .balls { display: flex; gap: 6px; flex-wrap: wrap; flex: 1 1 auto; }
+.play-idx {
+  flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: 12.5px; font-weight: 700; color: var(--muted);
+  border: 1px solid var(--border);
+}
+.play-ticket .btn { flex: 0 0 auto; min-width: 44px; min-height: 40px; }
+.play-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.play-actions .btn { flex: 1 1 auto; min-height: 46px; }
+.play-hint { display: block; }
+
+.view-toggle {
+  display: inline-flex; border: 1px solid var(--border); border-radius: 11px; overflow: hidden;
+}
+.view-toggle button {
+  border: 0; background: transparent; color: var(--ink-2); cursor: pointer;
+  padding: 7px 14px; font-size: 13px; font-weight: 640; min-height: 36px;
+}
+.view-toggle button.on {
+  background: color-mix(in srgb, var(--gold) 16%, transparent); color: var(--gold);
+}
+
+/* One line per ticket, whatever the phone width */
+.play-ticket .balls { flex-wrap: nowrap; }
+.play-ticket .ball.md { width: 36px; height: 36px; font-size: 14.5px; }
+@media (max-width: 379px) {
+  .play-ticket .ball.md { width: 32px; height: 32px; font-size: 13.5px; }
+}
+.play-card .next-draw { padding: 12px 14px; }

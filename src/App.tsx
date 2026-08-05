@@ -36,6 +36,7 @@ import { PortfolioPanel } from './components/PortfolioPanel.tsx'
 import { ConstraintLabPanel } from './components/ConstraintLabPanel.tsx'
 import { ValuePanel } from './components/ValuePanel.tsx'
 import { RecapBanner } from './components/RecapBanner.tsx'
+import { PlayView } from './components/PlayView.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 import { AddGameDialog } from './components/AddGameDialog.tsx'
 import { BrandLockup, JerryLockup } from './components/Logo.tsx'
@@ -89,6 +90,15 @@ export default function App() {
   const [gamesState, setGamesState] = useLocalStorage<GamesState>('patternlab.games.v1', initial)
   const [themeChoice, cycleTheme] = useTheme()
   const [dialog, setDialog] = useState<'' | 'import' | 'add' | 'settings' | 'addgame' | 'menu'>('')
+  /*
+   * Two faces of one app. "Play" is the phone-first answer to the only daily
+   * question — five games for the next draw — and "Lab" is every panel that
+   * justifies them. The engine runs identically under both; the split is
+   * purely about what greets you.
+   */
+  const [view, setView] = useLocalStorage<'play' | 'lab'>('patternlab.view.v1', 'play')
+  const [pendingJump, setPendingJump] = useState('')
+  const jumpToRef = useRef<((id: string) => void) | null>(null)
   const [flash, setFlash] = useState('')
   const [syncing, setSyncing] = useState(false)
   const [activeSection, setActiveSection] = useState('')
@@ -106,6 +116,14 @@ export default function App() {
     const oy = window.getComputedStyle(el).overflowY
     return oy === 'auto' || oy === 'scroll' ? el : null
   }, [])
+
+  useEffect(() => {
+    if (view !== 'lab' || !pendingJump) return
+    const id = pendingJump
+    setPendingJump('')
+    // Two frames so the lab grid has laid out before the scroll converges
+    requestAnimationFrame(() => requestAnimationFrame(() => jumpToRef.current?.(id)))
+  }, [view, pendingJump])
 
   const games = gamesState.games
   const activeGame: GameData | undefined = games.find((g) => g.id === gamesState.activeId) ?? games[0]
@@ -385,6 +403,14 @@ export default function App() {
    * repeating until the target sits under the nav converges in two or three
    * frames and reads as one instant move.
    */
+  // Keep the latest jumpTo reachable from the view-switch effect above it
+  useEffect(() => { jumpToRef.current = jumpTo })
+
+  const goLab = useCallback((section?: string) => {
+    setView('lab')
+    if (section) setPendingJump(section)
+  }, [setView])
+
   const jumpTo = useCallback((id: string) => {
     const el = document.getElementById(id)
     if (!el) return
@@ -475,6 +501,12 @@ export default function App() {
                 <button className="add" title="Add game" onClick={() => setDialog('addgame')}>+</button>
               </div>
             )}
+            {hasData && (
+              <div className="view-toggle" role="tablist" aria-label="View">
+                <button role="tab" aria-selected={view === 'play'} className={view === 'play' ? 'on' : ''} onClick={() => setView('play')}>Play</button>
+                <button role="tab" aria-selected={view === 'lab'} className={view === 'lab' ? 'on' : ''} onClick={() => setView('lab')}>Lab</button>
+              </div>
+            )}
             <div className="header-actions">
               {activeGame?.syncKey && (
                 <button className="btn" onClick={() => void syncGame(activeGame.id)} disabled={syncing} title="Fetch the latest official results">
@@ -489,7 +521,7 @@ export default function App() {
               <button className="btn primary" onClick={() => setDialog('add')} disabled={!hasData}>+ Add result</button>
             </div>
           </div>
-          {hasData && (
+          {hasData && view === 'lab' && (
             <nav className="nav">
               {NAV.map(([id, label]) => (
                 <a
@@ -554,7 +586,40 @@ export default function App() {
             </div>
           )}
 
-          {hasData && result?.ok && (
+          {hasData && result?.ok && view === 'play' && (
+            <div className={`grid play-grid ${computing ? 'stale' : ''}`}>
+              {showStaleNudge && (
+                <div className="notice era-banner">
+                  <div className="grow">
+                    <strong>New {activeGame!.name} results may be available</strong> — your newest saved draw is{' '}
+                    {formatDate(draws[draws.length - 1].date)}.
+                  </div>
+                  <button className="btn primary" onClick={() => void syncGame(activeGame!.id)} disabled={syncing}>
+                    ⟳ Sync now
+                  </button>
+                </div>
+              )}
+              <RecapBanner
+                res={result}
+                draws={draws}
+                gameId={activeGame?.id ?? ''}
+                savedTickets={activeGame?.savedTickets ?? EMPTY_TICKETS}
+              />
+              <PlayView
+                key={`play-${activeGame?.id}-${result.lastDate}`}
+                res={result}
+                game={activeGame}
+                draws={draws}
+                drawTime={settings.drawTime}
+                feed={feed}
+                onSetJackpot={setNextJackpot}
+                onSaveTicket={saveTicket}
+                onOpenLab={() => goLab()}
+              />
+            </div>
+          )}
+
+          {hasData && result?.ok && view === 'lab' && (
             <div className={`grid ${computing ? 'stale' : ''}`}>
               {showStaleNudge && (
                 <div className="notice era-banner">
@@ -669,8 +734,8 @@ export default function App() {
         <button className="primary" onClick={() => setDialog('add')} disabled={!hasData}>
           <span className="ico">＋</span> Add result
         </button>
-        <button onClick={() => jumpTo('ticket')} disabled={!hasData}>
-          <span className="ico">🎟</span> Tickets
+        <button onClick={() => (view === 'play' ? setView('lab') : setView('play'))} disabled={!hasData}>
+          <span className="ico">{view === 'play' ? '🔬' : '▶'}</span> {view === 'play' ? 'Lab' : 'Play'}
         </button>
         <button onClick={() => setDialog('menu')}>
           <span className="ico">☰</span> Menu
@@ -717,6 +782,7 @@ export default function App() {
           onImport={() => setDialog('import')}
           onAddGame={() => setDialog('addgame')}
           onSettings={() => setDialog('settings')}
+          onTickets={() => { setDialog(''); if (view === 'lab') jumpTo('ticket'); else goLab('ticket') }}
           canAct={!!activeGame}
         />
       )}
@@ -735,13 +801,14 @@ export default function App() {
 }
 
 
-function MenuSheet({ onClose, themeChoice, onTheme, onImport, onAddGame, onSettings, canAct }: {
+function MenuSheet({ onClose, themeChoice, onTheme, onImport, onAddGame, onSettings, onTickets, canAct }: {
   onClose: () => void
   themeChoice: string
   onTheme: () => void
   onImport: () => void
   onAddGame: () => void
   onSettings: () => void
+  onTickets: () => void
   canAct: boolean
 }) {
   const ref = useRef<HTMLDialogElement>(null)
@@ -756,6 +823,7 @@ function MenuSheet({ onClose, themeChoice, onTheme, onImport, onAddGame, onSetti
         <button className="icon-btn" onClick={onClose} aria-label="Close">✕</button>
       </div>
       <div className="dlg-body menu-sheet">
+        <button onClick={onTickets} disabled={!canAct}><span className="ico">🎟</span> Saved tickets</button>
         <button onClick={onImport} disabled={!canAct}><span className="ico">⤒</span> Import results</button>
         <button onClick={onAddGame}><span className="ico">🎲</span> Add a game</button>
         <button onClick={onSettings} disabled={!canAct}><span className="ico">⚙</span> Settings</button>
