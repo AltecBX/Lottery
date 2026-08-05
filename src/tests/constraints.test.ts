@@ -681,7 +681,7 @@ describe('screening new pattern families', () => {
     const cut = fams.filter((f) => CUT_FAMILIES.has(f.key))
     const kept = fams.filter((f) => !CUT_FAMILIES.has(f.key))
     expect(cut.map((f) => f.key).sort())
-      .toEqual(['digitSum', 'fib', 'mult5', 'oneDecade', 'sameDigit', 'slipRow', 'squareCube'])
+      .toEqual(['digitSum', 'fib', 'mult5', 'oneDecade', 'sameDigit', 'slipRow', 'squareCube', 'tightSpan'])
     for (const f of cut) expect(f.combos / choose(K, D)).toBeLessThan(0.0002)
     expect(kept.find((f) => f.key === 'evenSpaced')!.test([3, 19, 35, 51, 67])).toBe(true)
 
@@ -696,6 +696,9 @@ describe('screening new pattern families', () => {
     expect(accept([1, 4, 9, 16, 25])).toBe(false)      // squares
     expect(accept([2, 3, 5, 8, 13])).toBe(false)       // Fibonacci
     expect(accept([9, 18, 27, 36, 45])).toBe(false)    // one digit sum
+    expect(accept([14, 15, 16, 17, 18])).toBe(false)   // five in a row
+    expect(accept([1, 2, 3, 4, 6])).toBe(false)        // four in a row plus one
+    expect(accept([14, 16, 18, 20, 21])).toBe(false)   // clustered without adjacency
     expect(accept([3, 19, 35, 51, 67])).toBe(true)     // evenly spaced — it happened
     // One slip column is measured but never cut: 9,295 tickets, about one due
     // per era. Asserted on the family itself, since the shape bands reject this
