@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import type { Draw, EngineResult } from '../engine/types.ts'
 import type { SavedTicket } from '../engine/games.ts'
 import { buildPortfolio, lowerTierValue, type PortfolioStats } from '../engine/portfolio.ts'
+import { reducedPoolAcceptor } from '../engine/constraintlab.ts'
 import { formatOdds, jackpotOdds } from '../engine/odds.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
 
@@ -61,6 +62,16 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
   // a story get played, and a shared jackpot pays less.
   const pastWinners = useMemo(() => new Set(draws.map((d) => d.sorted.join('-'))), [draws])
 
+  // Every ticket comes from the same reduced pool the model's own pick is
+  // generated from — Balanced bands, no past main-set, no never-seen family,
+  // no record-edge total — so the two features never disagree.
+  const accept = useMemo(() => {
+    const lab = res.constraintLab
+    if (!lab) return null
+    const balanced = lab.modes.find((m) => m.key === 'balanced') ?? lab.modes[0]
+    return balanced ? reducedPoolAcceptor(lab, balanced, pastWinners) : null
+  }, [res.constraintLab, pastWinners])
+
   const scores = useMemo(() => {
     const s = new Float64Array(res.K + 1)
     for (const p of res.predictions) s[p.number] = Math.max(1e-9, p.probability)
@@ -100,9 +111,10 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
       spread,
       shape,
       exclude: pastWinners,
+      accept,
       trials: 60000,
     }),
-    [scores, res.K, res.drawSize, res.special?.K, specialPicks, count, spread, shape, pastWinners],
+    [scores, res.K, res.drawSize, res.special?.K, specialPicks, count, spread, shape, pastWinners, accept],
   )
 
   const { stats, quickPick, concentrated } = portfolio
@@ -225,9 +237,9 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
         Measured over {portfolio.trials.toLocaleString()} simulated draws from a fair, uniform machine, so every figure
         here holds whether or not the model's ranking is any good — coverage is a property of the tickets themselves.
         A quick pick is already well spread; the only difference between it and this set is <em>which</em> numbers get
-        covered, which is exactly where the model earns or fails to earn its keep. These tickets also keep to the shapes
-        real draws take and never reuse an exact past jackpot — neither changes any ticket's odds, but combinations
-        with a story attract co-winners, and a shared jackpot pays less.
+        covered, which is exactly where the model earns or fails to earn its keep. These tickets also come from the same
+        reduced pool as the model's pick — real-draw shapes, no past jackpot, no record-edge total — which changes no
+        ticket's odds, but combinations with a story attract co-winners, and a shared jackpot pays less.
       </p>
     </SectionCard>
   )
