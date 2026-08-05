@@ -31,14 +31,27 @@ export function PlayView({ res, game, draws, drawTime, feed, onSetJackpot, onSav
 }) {
   const [savedAt, setSavedAt] = useState<Set<number>>(() => new Set())
   const [shared, setShared] = useState(false)
+  // Each shuffle draws a fresh set from the same pool, so "more games" never
+  // means "looser games".
+  const [seed, setSeed] = useState(0x5eed)
 
   const pastWinners = useMemo(() => new Set(draws.map((d) => d.sorted.join('-'))), [draws])
-  const accept = useMemo(() => {
+  /*
+   * The deepest pool, not a middling one. The Lab's ladder exists so the
+   * trade-off can be inspected; the Play screen has already made the choice —
+   * play from the smallest candidate list the record can still stand behind.
+   */
+  const mode = useMemo(() => {
     const lab = res.constraintLab
     if (!lab) return null
-    const balanced = lab.modes.find((m) => m.key === 'balanced') ?? lab.modes[0]
-    return balanced ? reducedPoolAcceptor(lab, balanced, pastWinners) : null
-  }, [res.constraintLab, pastWinners])
+    return lab.modes.find((m) => m.key === 'deep') ?? lab.modes[lab.modes.length - 1] ?? null
+  }, [res.constraintLab])
+
+  const accept = useMemo(() => {
+    const lab = res.constraintLab
+    if (!lab || !mode) return null
+    return reducedPoolAcceptor(lab, mode, pastWinners)
+  }, [res.constraintLab, mode, pastWinners])
 
   const scores = useMemo(() => {
     const s = new Float64Array(res.K + 1)
@@ -72,9 +85,10 @@ export function PlayView({ res, game, draws, drawTime, feed, onSetJackpot, onSav
       shape,
       exclude: pastWinners,
       accept,
+      seed,
       trials: 1000,
     }).tickets,
-    [scores, res.K, res.drawSize, res.special, shape, pastWinners, accept],
+    [scores, res.K, res.drawSize, res.special, shape, pastWinners, accept, seed],
   )
 
   const saveOne = (i: number) => {
@@ -100,7 +114,6 @@ export function PlayView({ res, game, draws, drawTime, feed, onSetJackpot, onSav
   }
 
   const lab = res.constraintLab
-  const balanced = lab?.modes.find((m) => m.key === 'balanced')
 
   return (
     <section className="card hero-card play-card">
@@ -133,17 +146,26 @@ export function PlayView({ res, game, draws, drawTime, feed, onSetJackpot, onSav
 
       <div className="play-actions">
         <button className="btn primary" onClick={saveAll}>☆ Save all 5</button>
-        <button className="btn" onClick={onOpenLab}>Open the Lab →</button>
+        <button
+          className="btn"
+          onClick={() => { setSeed((v) => (v * 1103515245 + 12345) % 2147483647); setSavedAt(new Set()) }}
+        >
+          ⟳ Another five
+        </button>
+        <button className="btn ghost" onClick={onOpenLab}>Lab →</button>
       </div>
 
       <p className="hint play-hint">
         Five games, lowest to highest, learned from {res.drawCount.toLocaleString()} draws
-        {lab && balanced && (
-          <> and drawn from the reduced pool ({Math.round(balanced.spaceShare * 100)}% of all combinations after the
-          Lab's cuts)</>
+        {/* Rounded: the acceptor also drops past winners and the never-seen
+            families, so the exact figure is a shade under this one. */}
+        {lab && mode && (
+          <> and drawn from about {((mode.combinationsAfter * (res.special?.K ?? 1)) / 1e6).toFixed(1)} million
+          combinations — the deepest cut the record supports, keeping {Math.round(mode.spaceShare * 100)}% of the pool
+          and {Math.round(mode.survival * 100)}% of the winners it was tested against</>
         )}
-        . Spread to cover different numbers, never a past jackpot, never a shape this game has not produced. The Lab
-        holds every ranking, test and cut behind them.
+        . Spread to cover different numbers, never a past jackpot, never a shape this game has not produced.
+        <em> Another five</em> deals a fresh set from that same pool.
       </p>
     </section>
   )

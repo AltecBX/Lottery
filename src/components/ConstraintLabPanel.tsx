@@ -276,6 +276,29 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
       <div className="mini-title" style={{ marginTop: 18 }}>Where each drawn number lands</div>
       <PositionMap lab={lab} pick={res.bestCombo?.numbers ?? null} />
 
+      {lab.rejected.length > 0 && (
+        <>
+          <div className="mini-title" style={{ marginTop: 18 }}>Tested and rejected</div>
+          <div className="cl-presets">
+            {lab.rejected.map((r) => (
+              <div className="cl-preset cl-rejected" key={r.label}>
+                <div className="cl-preset-head">
+                  <span className="cl-preset-name">{r.label}</span>
+                  <span className="cl-preset-combos bad">
+                    broke {r.broke} of {big(r.chances)}<span className="sub"> · {fmtPct(r.rate, 1)} of draws</span>
+                  </span>
+                </div>
+                <div className="cl-preset-figs">{r.note}</div>
+              </div>
+            ))}
+          </div>
+          <p className="hint" style={{ display: 'block', marginTop: 8 }}>
+            A rule earns its place by surviving this test, not by looking convincing in a sorted column. Anything listed
+            here would have thrown away real winners at the rate shown, so the lab measured it and left it out.
+          </p>
+        </>
+      )}
+
       {lab.presets.length > 0 && (
         <>
           <div className="mini-title" style={{ marginTop: 18 }}>The shapes you can spot by sorting — priced exactly</div>

@@ -135,6 +135,11 @@ export interface ConstraintLab {
   presets: PresetElimination[]
   /** Record totals in the era's own draws — the sum cut's boundaries */
   sumRecord: { min: number; max: number; minDate: string; maxDate: string } | null
+  /**
+   * Rules that look compelling on a sorted sheet and fail a walk-forward test.
+   * Shown so a rejection is evidence rather than an opinion.
+   */
+  rejected: { label: string; broke: number; chances: number; rate: number; note: string }[]
   /** Every candidate rule, best first */
   rules: ConstraintRule[]
   modes: ConstraintMode[]
@@ -547,6 +552,49 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
     }
   }
 
+  /*
+   * Per-bonus-ball floors: "when the Powerball was 26 the total was never below
+   * 62" and so on down the pool. It is a real reading of a sorted sheet and a
+   * trap, because slicing the era's draws across the bonus pool leaves about
+   * fifty per value — and the minimum of fifty samples is nowhere near the true
+   * floor, so the next fifty routinely dive under it. Measured rather than
+   * argued: the floor each bonus value had established is checked against the
+   * next draw that used it.
+   */
+  const rejected: ConstraintLab['rejected'] = []
+  const hasSpecial = draws.some((d) => d.special !== undefined)
+  if (hasSpecial) {
+    const floor = new Map<number, number>()
+    let broke = 0
+    let chances = 0
+    for (const d of draws) {
+      if (d.special === undefined) continue
+      const total = d.sorted.reduce((a, b) => a + b, 0)
+      const prev = floor.get(d.special)
+      if (prev !== undefined) {
+        chances++
+        if (total < prev) broke++
+      }
+      floor.set(d.special, prev === undefined ? total : Math.min(prev, total))
+    }
+    // The same test on one pooled floor, for contrast
+    let globalFloor = Number.POSITIVE_INFINITY
+    let gBroke = 0
+    let gChances = 0
+    for (const d of draws) {
+      const total = d.sorted.reduce((a, b) => a + b, 0)
+      if (Number.isFinite(globalFloor)) { gChances++; if (total < globalFloor) gBroke++ }
+      globalFloor = Math.min(globalFloor, total)
+    }
+    if (chances > 0) {
+      rejected.push({
+        label: 'A separate total floor for each bonus ball',
+        broke, chances, rate: broke / chances,
+        note: `The bonus ball is drawn from its own machine and carries no information about the main total. Splitting the record across the bonus pool leaves roughly ${Math.round(draws.length / Math.max(1, floor.size))} draws per value, so each "floor" is just the lowest of a small sample — and the next draw dives under it ${((broke / chances) * 100).toFixed(1)}% of the time. One pooled floor over the same draws breaks ${((gBroke / Math.max(1, gChances)) * 100).toFixed(1)}% of the time, which is why that is the cut the lab actually applies.`,
+      })
+    }
+  }
+
   const usableRules = rules.filter((r) => r.usable)
   const best = [...usableRules].sort((a, b) => b.edgeZ - a.edgeZ)[0]
   // Reporting the strongest rule's z-score without saying whether it cleared the
@@ -561,7 +609,7 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
   rules.sort((a, b) => Number(b.usable) - Number(a.usable) || b.edgeZ - a.edgeZ)
 
   return {
-    K, drawSize: D, universe, evaluated, eraTrim, positionBands, presets, sumRecord,
+    K, drawSize: D, universe, evaluated, eraTrim, positionBands, presets, sumRecord, rejected,
     rules, modes, pareto, sampleSize: sample.size, verdict,
   }
 }
@@ -918,6 +966,13 @@ const MODE_TARGETS: { key: ConstraintMode['key']; label: string; target: number 
    * winners: roughly a third of them go too. This mode exists so the trade can
    * be taken with open eyes rather than pretended away — the ledger prints the
    * remainder and the winners-kept figure side by side.
+   */
+  /*
+   * The deepest setting, and the end of the ladder rather than a rung on it.
+   * Given a lower floor the greedy stalls in the same place: with 28 rules
+   * applied, every remaining candidate would drop winner survival past the
+   * floor in one step. That stall is the identity showing through — the rule
+   * family has no cut left that removes space without removing winners with it.
    */
   { key: 'deep', label: 'Deep cut', target: 0.68 },
 ]
