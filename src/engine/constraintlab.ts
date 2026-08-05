@@ -736,6 +736,59 @@ export function structuralFamilies(K: number, D: number): {
       note: 'Measured, never cut — this is the family that actually came up.',
     },
     {
+      // A Powerball slip is five columns of fourteen, so one slip row is a
+      // horizontal line across the ticket — the smallest family in the game.
+      key: 'slipRow',
+      label: 'A straight line across the play slip',
+      combos: (() => {
+        let t = 0
+        for (let r = 0; r < 14; r++) t += choose(countWhere((n) => (n - 1) % 14 === r), D)
+        return t
+      })(),
+      test: (s) => new Set(s.map((n) => (n - 1) % 14)).size === 1,
+      note: 'Five numbers on one slip row — thirteen such tickets exist in the whole game.',
+    },
+    {
+      key: 'slipColumn',
+      label: 'All five in one slip column',
+      combos: (() => {
+        let t = 0
+        for (let c = 0; c < 5; c++) t += choose(countWhere((n) => Math.min(4, Math.floor((n - 1) / 14)) === c), D)
+        return t
+      })(),
+      test: (s) => new Set(s.map((n) => Math.min(4, Math.floor((n - 1) / 14)))).size === 1,
+      note: 'Measured, never cut — 9,295 tickets and about one due per era, so its turn is coming.',
+    },
+    {
+      key: 'squareCube',
+      label: 'Every number a square or a cube',
+      combos: choose(countWhere((n) => Number.isInteger(Math.sqrt(n)) || Number.isInteger(Math.cbrt(n))), D),
+      test: (s) => s.every((n) => Number.isInteger(Math.sqrt(n)) || Number.isInteger(Math.cbrt(n))),
+      note: 'Drawn from 1, 4, 8, 9, 16, 25, 27, 36, 49 and 64 — nothing else qualifies.',
+    },
+    {
+      key: 'fib',
+      label: 'Every number in the Fibonacci run',
+      combos: choose(countWhere((n) => [1, 2, 3, 5, 8, 13, 21, 34, 55].includes(n)), D),
+      test: (s) => s.every((n) => [1, 2, 3, 5, 8, 13, 21, 34, 55].includes(n)),
+      note: 'Only nine Fibonacci numbers fit inside the pool.',
+    },
+    {
+      key: 'digitSum',
+      label: 'All five with the same digit sum',
+      combos: (() => {
+        const ds = (n: number) => String(n).split('').reduce((a, c) => a + Number(c), 0)
+        let t = 0
+        for (let v = 1; v <= 20; v++) t += choose(countWhere((n) => ds(n) === v), D)
+        return t
+      })(),
+      test: (s) => {
+        const ds = (n: number) => String(n).split('').reduce((a, c) => a + Number(c), 0)
+        return new Set(s.map(ds)).size === 1
+      },
+      note: '9-18-27-36-45 and the handful of others whose digits add to the same total.',
+    },
+    {
       key: 'column7',
       label: 'All five in one column of seven',
       // Residues mod 7: six classes of ten and one of nine at K=69
@@ -766,7 +819,7 @@ export function structuralFamilies(K: number, D: number): {
 }
 
 /** The families safe enough to leave out of the pool: tiny, and never observed. */
-export const CUT_FAMILIES = new Set(['oneDecade', 'mult5', 'sameDigit'])
+export const CUT_FAMILIES = new Set(['oneDecade', 'mult5', 'sameDigit', 'slipRow', 'squareCube', 'fib', 'digitSum'])
 
 /**
  * Combinations with at least `minPairs` adjacent pairs (values differing by 1).
@@ -1636,6 +1689,11 @@ export function reductionLedger(
     for (let d = 0; d <= decadeOf(K); d++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => decadeOf(n) === d))
     for (let g = 0; g <= 9; g++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 10 === g))
     groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 5 === 0))
+    for (let r = 0; r < 14; r++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => (n - 1) % 14 === r))
+    groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => Number.isInteger(Math.sqrt(n)) || Number.isInteger(Math.cbrt(n))))
+    groups.push([1, 2, 3, 5, 8, 13, 21, 34, 55].filter((n) => n <= K))
+    const digitSum = (n: number) => String(n).split('').reduce((a, c) => a + Number(c), 0)
+    for (let v = 1; v <= 20; v++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => digitSum(n) === v))
     for (const g of groups) for (const combo of kSubsets(g, D)) addCombo([...combo])
     void walk
   }

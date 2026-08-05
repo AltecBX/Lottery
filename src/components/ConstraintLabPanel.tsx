@@ -230,13 +230,15 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
           label="Unseen winners kept"
           value={fmtPct(mode.survival, 2)}
           delta={`against ${fmtPct(mode.spaceShare, 2)} of the space kept`}
-          deltaDir={mode.survival >= mode.spaceShare ? 'up' : 'down'}
+          /* Landing on the space share is the expected result, so only a clear
+             gap either way is worth colouring. */
+          deltaDir={Math.abs(mode.survival - mode.spaceShare) < 0.01 ? 'flat' : mode.survival > mode.spaceShare ? 'up' : 'down'}
         />
         <Tile
           label="Held-out winners kept"
           value={fmtPct(mode.holdoutSurvival, 2)}
           delta={`${big(mode.holdoutDraws)} draws the optimiser never saw`}
-          deltaDir={holdoutGap > 0 ? 'up' : 'down'}
+          deltaDir={Math.abs(holdoutGap) < 0.01 ? 'flat' : holdoutGap > 0 ? 'up' : 'down'}
         />
         <Tile
           label="Beat the fair line by"

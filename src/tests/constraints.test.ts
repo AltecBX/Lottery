@@ -680,7 +680,8 @@ describe('screening new pattern families', () => {
     const fams = structuralFamilies(K, D)
     const cut = fams.filter((f) => CUT_FAMILIES.has(f.key))
     const kept = fams.filter((f) => !CUT_FAMILIES.has(f.key))
-    expect(cut.map((f) => f.key).sort()).toEqual(['mult5', 'oneDecade', 'sameDigit'])
+    expect(cut.map((f) => f.key).sort())
+      .toEqual(['digitSum', 'fib', 'mult5', 'oneDecade', 'sameDigit', 'slipRow', 'squareCube'])
     for (const f of cut) expect(f.combos / choose(K, D)).toBeLessThan(0.0002)
     expect(kept.find((f) => f.key === 'evenSpaced')!.test([3, 19, 35, 51, 67])).toBe(true)
 
@@ -691,7 +692,16 @@ describe('screening new pattern families', () => {
     expect(accept([41, 43, 46, 47, 49])).toBe(false)   // one decade
     expect(accept([10, 25, 40, 55, 65])).toBe(false)   // multiples of five
     expect(accept([7, 17, 27, 37, 47])).toBe(false)    // one last digit
+    expect(accept([1, 15, 29, 43, 57])).toBe(false)    // a line across the play slip
+    expect(accept([1, 4, 9, 16, 25])).toBe(false)      // squares
+    expect(accept([2, 3, 5, 8, 13])).toBe(false)       // Fibonacci
+    expect(accept([9, 18, 27, 36, 45])).toBe(false)    // one digit sum
     expect(accept([3, 19, 35, 51, 67])).toBe(true)     // evenly spaced — it happened
+    // One slip column is measured but never cut: 9,295 tickets, about one due
+    // per era. Asserted on the family itself, since the shape bands reject this
+    // particular combination for an unrelated reason.
+    expect(kept.find((f) => f.key === 'slipColumn')!.test([2, 5, 9, 12, 14])).toBe(true)
+    expect(CUT_FAMILIES.has('slipColumn')).toBe(false)
   })
 
   it('rejects sliced floors, and the break rate tracks how thin the slice is', () => {
