@@ -5,7 +5,7 @@ import { SectionCard, Ball } from './shared.tsx'
 
 const PAGE = 10
 
-type SortKey = 'date' | 'hits' | 'bonus' | 'top10' | 'actual'
+type SortKey = 'date' | 'hits' | 'bonus' | 'top10' | 'actual' | 'pool'
 
 const specialHit = (p: BacktestPoint): number =>
   p.specialActual !== undefined && p.specialTop?.includes(p.specialActual) ? 1 : 0
@@ -28,6 +28,26 @@ export function PredictionLog({ res }: { res: EngineResult }) {
   const D = res.drawSize
   const points = res.backtest.points
   const hasSpecial = points.some((p) => p.specialActual !== undefined)
+  const hasPool = points.some((p) => p.poolKept !== undefined)
+
+  /**
+   * How the Deep cut actually did. Winners it would have held, against the
+   * share of the space it keeps — the two numbers that decide whether the cut
+   * bought anything, and the only honest way to read the column.
+   */
+  const deep = res.constraintLab?.modes.find((m) => m.key === 'deep') ?? null
+  const pool = useMemo(() => {
+    const judged = points.filter((p) => p.poolKept !== undefined)
+    const held = judged.filter((p) => p.poolKept).length
+    const why = new Map<string, number>()
+    for (const p of judged) if (p.poolCutBy) why.set(p.poolCutBy, (why.get(p.poolCutBy) ?? 0) + 1)
+    return {
+      judged: judged.length,
+      held,
+      rate: judged.length ? held / judged.length : 0,
+      top: [...why].sort((a, b) => b[1] - a[1]),
+    }
+  }, [points])
 
   const all = useMemo(() => {
     const arr = [...points]
@@ -36,6 +56,7 @@ export function PredictionLog({ res }: { res: EngineResult }) {
     else if (sortKey === 'bonus') arr.sort((a, b) => dir * (specialHit(a) - specialHit(b)) || b.index - a.index)
     else if (sortKey === 'top10') arr.sort((a, b) => dir * cmpSeq(a.predictedTop, b.predictedTop) || b.index - a.index)
     else if (sortKey === 'actual') arr.sort((a, b) => dir * cmpSeq(a.actual, b.actual) || b.index - a.index)
+    else if (sortKey === 'pool') arr.sort((a, b) => dir * (Number(a.poolKept ?? true) - Number(b.poolKept ?? true)) || b.index - a.index)
     else arr.sort((a, b) => dir * (a.index - b.index))
     return arr
   }, [points, sortKey, desc])
@@ -82,6 +103,18 @@ export function PredictionLog({ res }: { res: EngineResult }) {
           )}
         </p>
       )}
+      {hasPool && deep && pool.judged > 0 && (
+        <p className="hint" style={{ display: 'block', marginBottom: 10 }}>
+          <strong>Deep cut, replayed:</strong> the pool would have held{' '}
+          <strong>{pool.held.toLocaleString()} of {pool.judged.toLocaleString()}</strong> past winners
+          ({(100 * pool.rate).toFixed(1)}%) while keeping {(100 * deep.spaceShare).toFixed(1)}% of the
+          combinations — {Math.abs(pool.rate - deep.spaceShare) < 0.02
+            ? 'it costs almost exactly what it saves, which is what a fair draw forces.'
+            : `a gap of ${((pool.rate - deep.spaceShare) * 100).toFixed(1)} points.`}
+          {pool.top.length > 0 && <> Misses came from {pool.top.map(([k, n]) => `${k} (${n})`).join(', ')}.</>}
+          {' '}Each row is judged by the pool as it stood <em>before</em> that draw, so nothing here knows its own answer.
+        </p>
+      )}
       <div className="tbl-wrap">
         <table className="tbl">
           <thead>
@@ -91,6 +124,9 @@ export function PredictionLog({ res }: { res: EngineResult }) {
               <th className="sortable" onClick={() => setSort('actual')} title="Sort by the lowest drawn number (then the next, …)">Actual result{arrow('actual')}</th>
               {hasSpecial && (
                 <th className="sortable" onClick={() => setSort('bonus')} title="Sort by bonus-ball hits">Bonus{arrow('bonus')}</th>
+              )}
+              {hasPool && (
+                <th className="sortable" onClick={() => setSort('pool')} title="Sort by whether the Deep cut pool held this winner">Deep pool{arrow('pool')}</th>
               )}
               <th className="num sortable" onClick={() => setSort('hits')} title="Sort by hit count">Hits{arrow('hits')}</th>
             </tr>
@@ -135,6 +171,19 @@ export function PredictionLog({ res }: { res: EngineResult }) {
                       )}
                     </td>
                   )}
+                  {hasPool && (
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {p.poolKept === undefined ? (
+                        <span className="hint">—</span>
+                      ) : p.poolKept ? (
+                        <span style={{ color: 'var(--good-text)', fontWeight: 600 }} title="this winning combination was inside the Deep cut pool">held</span>
+                      ) : (
+                        <span className="hint" title={`the Deep cut pool would have missed this winner — removed by ${p.poolCutBy}`}>
+                          missed<span style={{ display: 'block', fontSize: 11 }}>{p.poolCutBy}</span>
+                        </span>
+                      )}
+                    </td>
+                  )}
                   <td className="num" style={{ fontWeight: 680, color: p.hits10 >= 2 ? 'var(--good-text)' : p.hits10 === 0 ? 'var(--muted)' : undefined }}>
                     {p.hits10}/{D}
                   </td>
@@ -142,7 +191,7 @@ export function PredictionLog({ res }: { res: EngineResult }) {
               )
             })}
             {rows.length === 0 && (
-              <tr><td colSpan={hasSpecial ? 5 : 4} style={{ color: 'var(--muted)' }}>Not enough history yet — the self-test starts once {res.backtest.minHistory} draws are loaded.</td></tr>
+              <tr><td colSpan={4 + (hasSpecial ? 1 : 0) + (hasPool ? 1 : 0)} style={{ color: 'var(--muted)' }}>Not enough history yet — the self-test starts once {res.backtest.minHistory} draws are loaded.</td></tr>
             )}
           </tbody>
         </table>

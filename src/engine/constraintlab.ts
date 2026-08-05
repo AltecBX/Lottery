@@ -88,6 +88,12 @@ export interface ConstraintMode {
   combinationsAfter: number
   /** Winners the selection would have thrown away, with their dates */
   eliminated: { date: string; numbers: number[]; failed: string[] }[]
+  /**
+   * Every date this mode's bands rejected the winner, uncapped — `eliminated`
+   * keeps only the first 25 for display. The prediction log replays the pool
+   * against the record and needs all of them.
+   */
+  failedDates: string[]
   funnel: FunnelStep[]
   /** survival − spaceShare in standard errors, over the draws used to select */
   edgeZ: number
@@ -793,14 +799,14 @@ export function structuralFamilies(K: number, D: number): {
       label: 'All five inside one decade',
       combos: oneDecade,
       test: (s) => decadeOf(s[0]) === decadeOf(s[D - 1]),
-      note: 'Measured, never cut — 2-5-6-9-10 came up on 2003-02-22. Expected 1.19 across the record, seen once.',
+      note: 'Cut by choice, not by evidence — 2-5-6-9-10 came up on 2003-02-22. Expected 1.19 across the record and seen once, so this removal has already cost one real winner.',
     },
     {
       key: 'mult5',
       label: 'All five multiples of five',
       combos: choose(countWhere((n) => n % 5 === 0), D),
       test: (s) => s.every((n) => n % 5 === 0),
-      note: 'Measured, never cut — 5-15-25-30-40 came up on 2009-10-14. The round-number ticket does get drawn.',
+      note: 'Cut by choice, not by evidence — 5-15-25-30-40 came up on 2009-10-14. The round-number ticket does get drawn, about once every thirty years.',
     },
     {
       key: 'sameDigit',
@@ -835,7 +841,7 @@ export function structuralFamilies(K: number, D: number): {
       label: 'All five inside an eight-number span',
       combos: windowCount(K, D, 8),
       test: (s) => s[D - 1] - s[0] <= 7,
-      note: 'Measured, never cut — 44-45-47-50-51 came up on 2015-09-09, five numbers inside a span of eight. Expected 1.58 across the record, seen once.',
+      note: 'Cut by choice, not by evidence — 44-45-47-50-51 came up on 2015-09-09, five numbers inside a span of eight. Expected 1.58 across the record, seen once.',
     },
     {
       // The one clustered shape with no precedent anywhere in the record. Its
@@ -1027,6 +1033,29 @@ export const CUT_FAMILIES = new Set([
   'sameDigit', 'slipRow', 'squareCube', 'fib', 'digitSum', 'runFive',
   'evenStepTight', 'sameMultiple', 'gridColumn', 'slipDiagonal', 'twoDigits', 'powerTwo', 'repdigit',
 ])
+
+/**
+ * Families removed from the pool by choice rather than by evidence.
+ *
+ * Each has been drawn exactly once in 3,535 draws, and each landed within
+ * ordinary noise of its own expected count — so unlike the set above, these
+ * carry no claim that the shape cannot happen. They are out because the reader
+ * looked at the price and decided one occurrence in thirty-odd years was worth
+ * spending. Kept apart from CUT_FAMILIES precisely so that decision stays
+ * visible: the value is the draw it has already cost.
+ *
+ * Three or more touching pairs is deliberately not here. It has been drawn
+ * three times, most recently 27-49-50-51-52 in 2019, which is a different
+ * proposition from once.
+ */
+export const CHOSEN_CUTS = new Map([
+  ['oneDecade', '2-5-6-9-10 on 2003-02-22'],
+  ['mult5', '5-15-25-30-40 on 2009-10-14'],
+  ['tightSpan', '44-45-47-50-51 on 2015-09-09'],
+])
+
+/** Everything the pool actually removes: proven-absent plus chosen. */
+export const POOL_CUTS = new Set([...CUT_FAMILIES, ...CHOSEN_CUTS.keys()])
 
 /**
  * Combinations with at least `minPairs` adjacent pairs (values differing by 1).
@@ -1526,7 +1555,9 @@ function buildModes(
       survivalLo: wilson(Math.round(full.survival * evaluated), evaluated).lo,
       combinationsBefore: universe,
       combinationsAfter: Math.round(universe * spaceShare),
-      eliminated, funnel,
+      eliminated,
+      failedDates: full.failedSteps.map((step) => draws[evaluatedIdx[step]].date),
+      funnel,
       edgeZ: (current.survival - inShare) / se,
       holdoutSurvival: holdout.survival,
       holdoutDraws: holdout.n,
@@ -1747,6 +1778,75 @@ export function modePredicate(lab: ConstraintLab, mode: ConstraintMode): (sorted
  * families (small next-to-largest, everything under 10, three or more touching
  * pairs). Exactly the ledger's rows, as a predicate.
  */
+/** One past draw judged against the pool as it stood before that draw. */
+export interface PoolVerdict {
+  date: string
+  kept: boolean
+  /** Which layer removed it, or null when the pool would have held it */
+  cutBy: string | null
+}
+
+/**
+ * Replay the reduced pool across the record, judging every draw by the pool as
+ * it stood *before* that draw was known.
+ *
+ * The point of the exercise is to answer "how would this cut have done?" without
+ * the answer being rigged, so every layer that depends on the data is rebuilt
+ * per step: the record totals come from earlier draws only, so a draw that sets
+ * a new record is cut by the boundary it is about to move; a main-set counts as
+ * already-drawn only if it appeared earlier. The mode's shape bands arrive
+ * pre-computed from the lab's own walk-forward pass. The static layers — the
+ * families, the position floors — carry no leak because they never consult the
+ * data at all.
+ *
+ * Draws before the lab's warm-up get no verdict, and neither do draws from a
+ * retired pool: both are absent from the returned map rather than guessed at.
+ */
+export function poolWalkForward(
+  lab: ConstraintLab,
+  mode: ConstraintMode,
+  allDraws: Draw[],
+): PoolVerdict[] {
+  const D = lab.drawSize
+  const eraInfo = detectEra(allDraws)
+  const draws = eraInfo ? allDraws.slice(eraInfo.cutoffIndex) : allDraws
+  const bandFailed = new Set(mode.failedDates)
+  // failedDates marks only the failures, so the warm-up length comes from the
+  // lab instead: `evaluated` draws were judged, ending at the most recent.
+  const firstJudged = Math.max(0, draws.length - lab.evaluated)
+  const judged = new Set<string>()
+
+  const families = structuralFamilies(lab.K, D).filter((f) => POOL_CUTS.has(f.key))
+  const seen = new Set<string>()
+  const out: PoolVerdict[] = []
+  let lo = Number.POSITIVE_INFINITY
+  let hi = Number.NEGATIVE_INFINITY
+
+  for (let i = 0; i < draws.length; i++) {
+    const d = draws[i]
+    const s = d.sorted
+    const key = s.join('-')
+    const total = s.reduce((a, b) => a + b, 0)
+    if (i >= firstJudged && !judged.has(d.date)) {
+      judged.add(d.date)
+      let cutBy: string | null = null
+      if (bandFailed.has(d.date)) cutBy = `${mode.label} shape bands`
+      else if (seen.has(key)) cutBy = 'already drawn'
+      else if (s[D - 2] <= 5 || s[D - 1] <= 9) cutBy = 'position floor'
+      else if (i > firstJudged && (total <= lo || total >= hi)) cutBy = 'record total'
+      else {
+        const fam = families.find((f) => f.test(s))
+        if (fam) cutBy = fam.label
+      }
+      out.push({ date: d.date, kept: cutBy === null, cutBy })
+    }
+    seen.add(key)
+    if (total < lo) lo = total
+    if (total > hi) hi = total
+  }
+  return out
+}
+
 export function reducedPoolAcceptor(
   lab: ConstraintLab,
   mode: ConstraintMode,
@@ -1755,7 +1855,7 @@ export function reducedPoolAcceptor(
   const passesMode = modePredicate(lab, mode)
   const D = lab.drawSize
   const rec = lab.sumRecord
-  const families = structuralFamilies(lab.K, D).filter((f) => CUT_FAMILIES.has(f.key))
+  const families = structuralFamilies(lab.K, D).filter((f) => POOL_CUTS.has(f.key))
   return (sorted: number[]): boolean => {
     if (sorted[D - 2] <= 5 || sorted[D - 1] <= 9) return false
     let total = 0
@@ -1875,7 +1975,7 @@ export function reductionLedger(
   for (const combo of kSubsets(top9, D)) addCombo([...combo])
   // Structural families safe enough to cut: enumerated so their overlap with
   // everything above is exact rather than estimated.
-  const cutFams = structuralFamilies(K, D).filter((f) => CUT_FAMILIES.has(f.key))
+  const cutFams = structuralFamilies(K, D).filter((f) => POOL_CUTS.has(f.key))
   if (cutFams.length) {
     const walk = (start: number, pick: number[]) => {
       if (pick.length === D) {
@@ -1890,10 +1990,14 @@ export function reductionLedger(
     }
     // Only the decades, multiples and digit runs can qualify, so walking each
     // family's own members is far cheaper than the whole universe.
-    // Decades, one-decade spans and multiples of five are deliberately absent:
-    // all three have been drawn, so they are measured rather than deducted.
     const groups: number[][] = []
     for (let g = 0; g <= 9; g++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 10 === g))
+    // The three chosen cuts: each has been drawn once, and each is here because
+    // that price was looked at and accepted.
+    const decadeOf = (n: number) => Math.floor((n - 1) / 10)
+    for (let d = 0; d <= decadeOf(K); d++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => decadeOf(n) === d))
+    groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 5 === 0))
+    for (let m = 1; m + 7 <= K; m++) groups.push(Array.from({ length: 8 }, (_, i) => m + i))
     for (let r = 0; r < 14; r++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => (n - 1) % 14 === r))
     groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => Number.isInteger(Math.sqrt(n)) || Number.isInteger(Math.cbrt(n))))
     groups.push([1, 2, 3, 5, 8, 13, 21, 34, 55].filter((n) => n <= K))
@@ -1925,9 +2029,9 @@ export function reductionLedger(
     if (!passesMode(combo)) continue
     familySurvivors++
   }
-  push('families', 'Never-drawn families — five in a row, one last digit, one slip row or diagonal, shared multiples, narrow grid columns, even progressions, every 1-2-3-4-x — not already cut',
+  push('families', 'Never-drawn families — five in a row, one last digit, one slip row or diagonal, shared multiples, narrow grid columns, even progressions, every 1-2-3-4-x — plus one decade, all multiples of five and the eight-number span, cut by choice',
     familySurvivors * sk,
-    'cost 0 tested winners — none of these has appeared in 3,535 draws across every era', true)
+    'cost 0 tested winners in this era — but the three chosen cuts have taken 3 draws across the full record: 2-5-6-9-10, 5-15-25-30-40 and 44-45-47-50-51', true)
 
   // Totals at or beyond the era's records, enumerated member by member. The
   // regions are small enough to walk exactly: the low side directly, the high

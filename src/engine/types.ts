@@ -142,6 +142,13 @@ export interface BacktestPoint {
   specialTop?: number[]
   /** Bonus ball actually drawn */
   specialActual?: number
+  /**
+   * Would the Deep cut pool — as it stood before this draw — have contained the
+   * winning combination? Undefined for draws the pool has no verdict on.
+   */
+  poolKept?: boolean
+  /** The layer that removed it, when the pool would have missed this winner */
+  poolCutBy?: string
 }
 
 export interface SignalPerformance {

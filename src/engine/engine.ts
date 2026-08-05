@@ -6,7 +6,7 @@ import { buildCombos } from './combos.ts'
 import { computeSpecialRawSignals, similarityScores, SIGNAL_LABEL, zNormalize } from './signals.ts'
 import { analyzeRepeats } from './repeats.ts'
 import { analyzePositions, positionalFit } from './positions.ts'
-import { analyzeConstraints, reducedPoolAcceptor } from './constraintlab.ts'
+import { analyzeConstraints, poolWalkForward, reducedPoolAcceptor } from './constraintlab.ts'
 import { detectEra } from './era.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
@@ -159,6 +159,19 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
     if (balanced) {
       const pastKeys = new Set(draws.map((d) => d.sorted.join('-')))
       acceptor = reducedPoolAcceptor(constraintLab, balanced, pastKeys)
+    }
+    // Replay the Deep cut across the record and hang the verdict on each
+    // backtest point, so the prediction log can show what the pool the tickets
+    // come from would have done — judged only on what was known at the time.
+    const deep = constraintLab.modes.find((m) => m.key === 'deep')
+    if (deep) {
+      const verdicts = new Map(poolWalkForward(constraintLab, deep, draws).map((v) => [v.date, v]))
+      for (const p of bt.summary.points) {
+        const v = verdicts.get(p.date)
+        if (!v) continue
+        p.poolKept = v.kept
+        if (v.cutBy) p.poolCutBy = v.cutBy
+      }
     }
   }
 
