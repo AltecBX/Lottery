@@ -13,6 +13,7 @@ import { detectEra, drawsForEra } from './engine/era.ts'
 import { fetchJackpotFeed, type JackpotFeed } from './engine/feed.ts'
 import { useEngine } from './hooks/useEngine.ts'
 import { useLocalStorage, useTheme } from './hooks/useLocalStorage.ts'
+import { useWeather, weatherLook } from './hooks/useWeather.ts'
 import { useServiceWorker } from './hooks/useServiceWorker.ts'
 import { usePullToRefresh } from './hooks/usePullToRefresh.ts'
 import { PredictionPanel } from './components/PredictionPanel.tsx'
@@ -89,6 +90,7 @@ export default function App() {
   const initial = useMemo(loadInitialGames, [])
   const [gamesState, setGamesState] = useLocalStorage<GamesState>('patternlab.games.v1', initial)
   const [themeChoice, cycleTheme] = useTheme()
+  const weather = useWeather()
   const [dialog, setDialog] = useState<'' | 'import' | 'add' | 'settings' | 'addgame' | 'menu'>('')
   /*
    * Two faces of one app. "Play" is the phone-first answer to the only daily
@@ -485,6 +487,13 @@ export default function App() {
             <h1 className="brand">
               <BrandLockup />
             </h1>
+            {weather && (
+              <div className="wx" title={`${weatherLook(weather.code, weather.isDay).label}${weather.place ? ` in ${weather.place}` : ''}`}>
+                <span className="wx-ico" aria-hidden="true">{weatherLook(weather.code, weather.isDay).icon}</span>
+                <span className="wx-temp">{weather.tempF}°</span>
+                {weather.place && <span className="wx-place">{weather.place}</span>}
+              </div>
+            )}
             {games.length > 0 && (
               <div className="game-tabs" role="tablist" aria-label="Games">
                 {games.map((g) => (

@@ -1323,3 +1323,41 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 .cl-rejected { border-color: color-mix(in srgb, var(--bad-text) 40%, var(--border)); }
 .cl-preset-combos.bad { color: var(--bad-text); font-weight: 640; }
 .play-actions .btn.ghost { flex: 0 1 auto; }
+
+/* ---------- Weather chip ---------- */
+.wx {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  padding: 5px 10px; border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  font-size: 13px; line-height: 1; white-space: nowrap; flex: 0 0 auto;
+}
+.wx-ico { font-size: 14px; color: var(--gold); }
+.wx-temp { font-weight: 680; font-variant-numeric: tabular-nums; color: var(--ink); }
+.wx-place {
+  color: var(--muted); font-size: 12px; font-weight: 560;
+  max-width: 11ch; overflow: hidden; text-overflow: ellipsis;
+}
+/* On a phone the brand and game tabs come first; the place name is the part
+   that goes when there is no room for it. */
+@media (max-width: 520px) {
+  .wx { padding: 4px 8px; font-size: 12.5px; }
+  .wx-place { display: none; }
+}
+
+/* The bottom bar already carries Play/Lab, so on a phone the header keeps the
+   brand, the weather and the games — one control per job. Declared here rather
+   than in the earlier mobile block because the .view-toggle base rule below it
+   would otherwise win on source order. */
+@media (max-width: 760px) {
+  .view-toggle { display: none; }
+}
+
+/* The title takes the room that is left rather than all of it, so the Share
+   button stays inside the card instead of being pushed past its right edge. */
+/* A grid item defaults to min-width:auto, so any child whose min-content is
+   wider than the card pushes the whole column out — here the date line took the
+   card 53px past its own padding and slid the Share button under the edge.
+   Pinning the column to minmax(0,1fr) lets the contents shrink instead. */
+.play-card { grid-template-columns: minmax(0, 1fr); }
+.play-card > * { min-width: 0; }
