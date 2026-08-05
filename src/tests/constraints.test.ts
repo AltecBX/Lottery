@@ -5,7 +5,7 @@ import {
 } from '../engine/constraints.ts'
 import {
   adjacencyAtLeast, analyzeConstraints, clusteredCombos, countRthAtMost, MIN_CONSTRAINT_HISTORY,
-  CUT_FAMILIES, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
+  CUT_FAMILIES, MAX_CUT_STEP, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
   positionBandCount, sumAtMostCount, sumBoundedCombos, windowCount,
 } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
@@ -681,7 +681,7 @@ describe('screening new pattern families', () => {
     const cut = fams.filter((f) => CUT_FAMILIES.has(f.key))
     const kept = fams.filter((f) => !CUT_FAMILIES.has(f.key))
     expect(cut.map((f) => f.key).sort())
-      .toEqual(['digitSum', 'fib', 'mult5', 'oneDecade', 'sameDigit', 'slipRow', 'squareCube', 'tightSpan'])
+      .toEqual(['digitSum', 'evenStepTight', 'fib', 'mult5', 'oneDecade', 'sameDigit', 'slipRow', 'squareCube', 'tightSpan'])
     for (const f of cut) expect(f.combos / choose(K, D)).toBeLessThan(0.0002)
     expect(kept.find((f) => f.key === 'evenSpaced')!.test([3, 19, 35, 51, 67])).toBe(true)
 
@@ -705,6 +705,41 @@ describe('screening new pattern families', () => {
     // particular combination for an unrelated reason.
     expect(kept.find((f) => f.key === 'slipColumn')!.test([2, 5, 9, 12, 14])).toBe(true)
     expect(CUT_FAMILIES.has('slipColumn')).toBe(false)
+  })
+
+  it('cuts every even progression up to step 11 and keeps the wider ones', () => {
+    const fams = structuralFamilies(K, D)
+    const tight = fams.find((f) => f.key === 'evenStepTight')!
+    const parent = fams.find((f) => f.key === 'evenSpaced')!
+
+    // The whole family, step by step: 1..MAX_CUT_STEP in, the rest out.
+    for (let step = 1; step <= Math.floor((K - 1) / (D - 1)); step++) {
+      for (let a = 1; a + (D - 1) * step <= K; a++) {
+        const combo = Array.from({ length: D }, (_, i) => a + i * step)
+        expect(tight.test(combo)).toBe(step <= MAX_CUT_STEP)
+        expect(parent.test(combo)).toBe(true)
+      }
+    }
+    expect(tight.combos).toBe(495)
+    expect(parent.combos - tight.combos).toBe(66)   // steps 12..17, where the real draw sits
+
+    // Zero sightings is what a fair machine predicts here, so "never happened"
+    // is not evidence — it is the null result. 495 of 11.2M over the whole
+    // record expects well under one hit, which is why this cut is cheap rather
+    // than informative, and why the parent family stays uncut.
+    expect((3535 * tight.combos) / choose(K, D)).toBeLessThan(0.5)
+
+    const draws = fairDraws(900, 4711)
+    const lab = analyzeConstraints(draws, K, D)!
+    const accept = reducedPoolAcceptor(lab, lab.modes.find((m) => m.key === 'balanced')!, new Set())
+    for (let step = 1; step <= MAX_CUT_STEP; step++) {
+      for (let a = 1; a + (D - 1) * step <= K; a++) {
+        expect(accept(Array.from({ length: D }, (_, i) => a + i * step))).toBe(false)
+      }
+    }
+    // The boundary is drawn where the single observed hit sits, so the wider
+    // steps have to survive the acceptor — including the draw itself.
+    expect(accept([3, 19, 35, 51, 67])).toBe(true)
   })
 
   it('rejects sliced floors, and the break rate tracks how thin the slice is', () => {
