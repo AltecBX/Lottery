@@ -1319,3 +1319,7 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   .play-ticket .ball.md { width: 32px; height: 32px; font-size: 13.5px; }
 }
 .play-card .next-draw { padding: 12px 14px; }
+
+.cl-rejected { border-color: color-mix(in srgb, var(--bad-text) 40%, var(--border)); }
+.cl-preset-combos.bad { color: var(--bad-text); font-weight: 640; }
+.play-actions .btn.ghost { flex: 0 1 auto; }
