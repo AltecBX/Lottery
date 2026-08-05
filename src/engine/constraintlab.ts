@@ -682,6 +682,69 @@ export function windowCount(K: number, D: number, W: number): number {
  * is the fair-lottery identity turning up again in a different disguise.
  */
 /**
+ * Number sets small enough that picking the whole draw out of one of them is a
+ * family in its own right.
+ *
+ * Every entry is a "all five come from this handful" shape. Both the exact
+ * family count and the ledger's enumeration read from here, so a family can
+ * never be priced one way and deducted another — the bug that would otherwise
+ * be invisible, because each side looks right on its own.
+ */
+export function narrowGroups(K: number): { key: string; groups: number[][] }[] {
+  const upTo = (f: (n: number) => boolean): number[] => {
+    const r: number[] = []
+    for (let n = 1; n <= K; n++) if (f(n)) r.push(n)
+    return r
+  }
+  const out: { key: string; groups: number[][] }[] = []
+
+  // All five multiples of one number, six or higher. Multiples of two, three
+  // and four have all come up — 94 draws share a factor that small — so the
+  // family starts where the history goes quiet.
+  const multiples: number[][] = []
+  for (let m = 6; m <= K; m++) multiples.push(upTo((n) => n % m === 0))
+  out.push({ key: 'sameMultiple', groups: multiples })
+
+  // One column of a narrow grid: all five leaving the same remainder. Seven and
+  // eight wide are deliberately absent — both have been drawn.
+  const cols: number[][] = []
+  for (const m of NARROW_GRIDS) for (let r = 0; r < m; r++) cols.push(upTo((n) => n % m === r))
+  out.push({ key: 'gridColumn', groups: cols })
+
+  // The play slip is fourteen across, so after the row and the column the
+  // diagonal is the last straight line left on it.
+  const row = (n: number) => Math.floor((n - 1) / 14)
+  const col = (n: number) => (n - 1) % 14
+  const diag: number[][] = []
+  for (let c = -14; c <= 14; c++) diag.push(upTo((n) => col(n) - row(n) === c))
+  for (let c = 0; c <= 28; c++) diag.push(upTo((n) => col(n) + row(n) === c))
+  out.push({ key: 'slipDiagonal', groups: diag })
+
+  // The whole ticket written with only two digits: 12-21-22-11-12 and its kind.
+  const pairs: number[][] = []
+  for (let a = 0; a <= 9; a++) {
+    for (let b = a + 1; b <= 9; b++) {
+      pairs.push(upTo((n) => String(n).split('').every((c) => Number(c) === a || Number(c) === b)))
+    }
+  }
+  out.push({ key: 'twoDigits', groups: pairs })
+
+  out.push({ key: 'powerTwo', groups: [upTo((n) => (n & (n - 1)) === 0)] })
+  out.push({ key: 'repdigit', groups: [upTo((n) => n >= 11 && new Set(String(n)).size === 1)] })
+  return out
+}
+
+/** Grid widths where a full column has never been drawn — 7 and 8 both have. */
+const NARROW_GRIDS = [9, 11, 12, 13]
+
+/** How many distinct D-subsets a set of groups covers between them. */
+function unionSubsets(groups: number[][], D: number): number {
+  const seen = new Set<string>()
+  for (const g of groups) for (const combo of kSubsets(g, D)) seen.add(combo.join('-'))
+  return seen.size
+}
+
+/**
  * Widest even step that still gets cut.
  *
  * A progression stepping by 1..11 — 1-7-13-19-25, 5-10-15-20-25, 2-6-10-14-18 —
@@ -711,6 +774,9 @@ export function structuralFamilies(K: number, D: number): {
     for (let n = 1; n <= K; n++) if (f(n)) c++
     return c
   }
+  const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a)
+  const narrow = new Map(narrowGroups(K).map((g) => [g.key, g.groups]))
+  const narrowCount = (key: string): number => unionSubsets(narrow.get(key)!, D)
   const decadeOf = (n: number): number => Math.floor((n - 1) / 10)
   let oneDecade = 0
   for (let d = 0; d <= decadeOf(K); d++) oneDecade += choose(countWhere((n) => decadeOf(n) === d), D)
@@ -727,14 +793,14 @@ export function structuralFamilies(K: number, D: number): {
       label: 'All five inside one decade',
       combos: oneDecade,
       test: (s) => decadeOf(s[0]) === decadeOf(s[D - 1]),
-      note: 'Every number sharing a tens digit — 41-43-46-47-49 and its relatives.',
+      note: 'Measured, never cut — 2-5-6-9-10 came up on 2003-02-22. Expected 1.19 across the record, seen once.',
     },
     {
       key: 'mult5',
       label: 'All five multiples of five',
       combos: choose(countWhere((n) => n % 5 === 0), D),
       test: (s) => s.every((n) => n % 5 === 0),
-      note: 'The round-number ticket: 10-25-40-55-65 and every other one like it.',
+      note: 'Measured, never cut — 5-15-25-30-40 came up on 2009-10-14. The round-number ticket does get drawn.',
     },
     {
       key: 'sameDigit',
@@ -769,7 +835,16 @@ export function structuralFamilies(K: number, D: number): {
       label: 'All five inside an eight-number span',
       combos: windowCount(K, D, 8),
       test: (s) => s[D - 1] - s[0] <= 7,
-      note: 'Every tight cluster, adjacent or not — 2,191 tickets, of which 1,370 no other rule here reaches.',
+      note: 'Measured, never cut — 44-45-47-50-51 came up on 2015-09-09, five numbers inside a span of eight. Expected 1.58 across the record, seen once.',
+    },
+    {
+      // The one clustered shape with no precedent anywhere in the record. Its
+      // neighbours all have some: four in a row plus one was drawn in 2019.
+      key: 'runFive',
+      label: 'Five consecutive numbers',
+      combos: Math.max(0, K - D + 1),
+      test: (s) => s.every((n, i) => i === 0 || n - s[i - 1] === 1),
+      note: 'The whole draw in one unbroken run — 14-15-16-17-18 and the 64 others like it. The only tight shape with no precedent: four in a row plus a stray was drawn on 2019-02-20 as 27-49-50-51-52.',
     },
     {
       key: 'slipRow',
@@ -849,11 +924,107 @@ export function structuralFamilies(K: number, D: number): {
       test: (s) => s.every(prime),
       note: 'Measured, never cut — it has occurred, on the schedule its count predicts.',
     },
+    {
+      key: 'sameMultiple',
+      label: 'All five multiples of the same number',
+      combos: narrowCount('sameMultiple'),
+      test: (s) => s.reduce(gcd) >= 6,
+      note: 'Sixes, sevens, eights and up — 6-12-30-48-66 and its kind. Twos, threes and fours are not here: 94 draws share a factor that small, so the family can only start where the record goes quiet.',
+    },
+    {
+      key: 'gridColumn',
+      label: `All five in one column of a ${NARROW_GRIDS.join(', ')}-wide grid`,
+      combos: narrowCount('gridColumn'),
+      test: (s) => NARROW_GRIDS.some((m) => new Set(s.map((n) => n % m)).size === 1),
+      note: 'Same remainder every time, so they line up in a column however the pool is written out. Seven and eight wide are deliberately missing — both have been drawn.',
+    },
+    {
+      key: 'slipDiagonal',
+      label: 'A diagonal across the play slip',
+      combos: narrowCount('slipDiagonal'),
+      test: (s) => {
+        const key = (n: number, dir: number) => ((n - 1) % 14) + dir * Math.floor((n - 1) / 14)
+        return new Set(s.map((n) => key(n, -1))).size === 1 || new Set(s.map((n) => key(n, 1))).size === 1
+      },
+      note: 'The slip is fourteen across, so after the row and the column the diagonal is the last straight line left to draw on it.',
+    },
+    {
+      key: 'twoDigits',
+      label: 'The whole ticket written with two digits',
+      combos: narrowCount('twoDigits'),
+      test: (s) => new Set(s.flatMap((n) => String(n).split(''))).size <= 2,
+      note: '1-11-12-21-22 uses nothing but ones and twos. Ten digits, forty-five pairs, and not one of those tickets has ever come up.',
+    },
+    {
+      key: 'powerTwo',
+      label: 'All five powers of two',
+      combos: narrowCount('powerTwo'),
+      test: (s) => s.every((n) => (n & (n - 1)) === 0),
+      note: 'The doubling ticket: 1, 2, 4, 8, 16, 32 and 64 are every power of two the pool holds.',
+    },
+    {
+      key: 'repdigit',
+      label: 'All five double-numbers',
+      combos: narrowCount('repdigit'),
+      test: (s) => s.every((n) => n >= 11 && new Set(String(n)).size === 1),
+      note: '11-22-33-44-55-66, the numbers people circle because they look deliberate. Six of them exist, so the whole family is a handful of tickets.',
+    },
+    {
+      key: 'mirrorPool',
+      // Pairs (a, K+1−a), plus the midpoint when both K and D allow one
+      label: 'A mirror image of the pool',
+      combos: D % 2 === 0 ? choose(Math.floor(K / 2), D / 2)
+        : K % 2 === 1 ? choose(Math.floor(K / 2), (D - 1) / 2) : 0,
+      test: (s) => s.every((n, i) => n + s[D - 1 - i] === K + 1),
+      note: 'Measured, never cut — 3-19-35-51-67 on 2026-04-29 folds onto itself exactly: 3+67, 19+51, and 35 dead centre. That one draw is also an even progression and a full column of an eight-wide grid, three "impossible" shapes in a single ticket.',
+    },
+    {
+      key: 'fibLike',
+      label: 'Each number the sum of the two before it',
+      combos: (() => {
+        if (D < 3) return 0
+        let t = 0
+        for (let a = 1; a <= K; a++) {
+          for (let b = a + 1; b <= K; b++) {
+            const seq = [a, b]
+            while (seq.length < D) seq.push(seq[seq.length - 1] + seq[seq.length - 2])
+            if (seq[D - 1] <= K) t++
+          }
+        }
+        return t
+      })(),
+      test: (s) => s.every((n, i) => i < 2 || n === s[i - 1] + s[i - 2]),
+      note: 'Measured, never cut — 1-3-4-7-11 came up on 2002-06-19, and 3+4 is 7, 4+7 is 11.',
+    },
+    {
+      key: 'triangular',
+      label: 'All five triangular numbers',
+      combos: choose(countWhere((n) => Number.isInteger(Math.sqrt(8 * n + 1))), D),
+      test: (s) => s.every((n) => Number.isInteger(Math.sqrt(8 * n + 1))),
+      note: 'Measured, never cut — 3-21-28-36-45 came up on 1996-12-18, every number a running total of 1+2+3+…',
+    },
   ]
 }
 
 /** The families safe enough to leave out of the pool: tiny, and never observed. */
-export const CUT_FAMILIES = new Set(['oneDecade', 'mult5', 'sameDigit', 'slipRow', 'squareCube', 'fib', 'digitSum', 'tightSpan', 'evenStepTight'])
+/**
+ * The families safe enough to leave out of the pool: tiny, and never drawn in
+ * the whole recorded history of the game — every era, not just this one.
+ *
+ * Scoping the check to the current era was hiding real precedent. Three or more
+ * touching pairs has come up three times against an expected 4.73, one of them
+ * 27-49-50-51-52 on 2019-02-20 inside this very era; an eight-number span came
+ * up on 2015-09-09; one decade on 2003-02-22; all multiples of five on
+ * 2009-10-14. Each landed within ordinary noise of its own count, which is the
+ * fair-lottery identity again: a shape shows up at the rate its size predicts,
+ * and being able to name it afterwards does not make it rare. All four are
+ * measured here rather than cut, and only the five-in-a-row shape they contain
+ * — 65 tickets, still unseen — stays out.
+ */
+export const CUT_FAMILIES = new Set([
+  'sameDigit', 'slipRow', 'squareCube', 'fib', 'digitSum', 'runFive',
+  'evenStepTight', 'sameMultiple', 'gridColumn', 'slipDiagonal', 'twoDigits', 'powerTwo', 'repdigit',
+])
 
 /**
  * Combinations with at least `minPairs` adjacent pairs (values differing by 1).
@@ -1034,7 +1205,7 @@ function presetEliminations(
     if (total > maxSum) maxSum = total
   }
   add('clustered', 'Three or more touching pairs', adjacencyAtLeast(K, D, 3), clustered,
-    'One family holds every "too clustered" case: five in a row like 14-15-16-17-18, four in a row plus one like 1-2-3-4-6, and split runs like 1-2-3-65-66.')
+    'Measured, never cut — drawn three times: 1-2-3-26-27, 19-20-21-45-46, and 27-49-50-51-52 on 2019-02-20, which is four in a row plus a stray. Expected 4.73 across the record, seen 3. Only the unbroken five-in-a-row inside it stays cut.')
   if (Number.isFinite(minSum)) {
     const below = sumAtMostCount(K, D, minSum - 1)
     if (below > 0) {
@@ -1585,13 +1756,11 @@ export function reducedPoolAcceptor(
   const families = structuralFamilies(lab.K, D).filter((f) => CUT_FAMILIES.has(f.key))
   return (sorted: number[]): boolean => {
     if (sorted[D - 2] <= 5 || sorted[D - 1] <= 9) return false
-    let adj = 0
     let total = 0
-    for (let i = 0; i < D; i++) {
-      total += sorted[i]
-      if (i > 0 && sorted[i] - sorted[i - 1] === 1) adj++
-    }
-    if (adj >= 3) return false
+    for (let i = 0; i < D; i++) total += sorted[i]
+    // Adjacency is no longer cut wholesale: three touching pairs has been drawn
+    // three times, most recently 27-49-50-51-52 in 2019. Only the unbroken
+    // five-in-a-row survives as a family, and it comes through the loop below.
     for (const fam of families) if (fam.test(sorted)) return false
     // Totals at or beyond the era's records are cut — deliberately including
     // the record draws themselves, and the ledger charges those two winners.
@@ -1719,17 +1888,18 @@ export function reductionLedger(
     }
     // Only the decades, multiples and digit runs can qualify, so walking each
     // family's own members is far cheaper than the whole universe.
-    const decadeOf = (n: number) => Math.floor((n - 1) / 10)
+    // Decades, one-decade spans and multiples of five are deliberately absent:
+    // all three have been drawn, so they are measured rather than deducted.
     const groups: number[][] = []
-    for (let d = 0; d <= decadeOf(K); d++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => decadeOf(n) === d))
     for (let g = 0; g <= 9; g++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 10 === g))
-    groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 5 === 0))
     for (let r = 0; r < 14; r++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => (n - 1) % 14 === r))
-    for (let m = 1; m + 7 <= K; m++) groups.push(Array.from({ length: 8 }, (_, i) => m + i))
     groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => Number.isInteger(Math.sqrt(n)) || Number.isInteger(Math.cbrt(n))))
     groups.push([1, 2, 3, 5, 8, 13, 21, 34, 55].filter((n) => n <= K))
     const digitSum = (n: number) => String(n).split('').reduce((a, c) => a + Number(c), 0)
     for (let v = 1; v <= 20; v++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => digitSum(n) === v))
+    // The narrow-set families read from the same definition that priced them,
+    // so the row can never deduct a different family than the table charged for.
+    for (const n of narrowGroups(K)) for (const g of n.groups) groups.push(g)
     for (const g of groups) for (const combo of kSubsets(g, D)) addCombo([...combo])
     // Even progressions are the one cut family that is not "all D from a single
     // small set", so the group walk above cannot reach them. Enumerate each
@@ -1742,9 +1912,10 @@ export function reductionLedger(
     }
     void walk
   }
-  // Three or more touching pairs — 62-63-64-65-66, 1-63-64-65-66, 1-2-3-65-66
-  // and every straight run all belong to this one family
-  for (const combo of clusteredCombos(K, D)) addCombo(combo)
+  // Five in a row — the only clustered shape with no precedent. The wider
+  // ≥3-touching-pairs family it sits inside has been drawn three times, so that
+  // one is measured in the table above instead of deducted here.
+  for (let m = 1; m + D - 1 <= K; m++) addCombo(Array.from({ length: D }, (_, i) => m + i))
 
   let familySurvivors = 0
   for (const combo of family.values()) {
@@ -1752,9 +1923,9 @@ export function reductionLedger(
     if (!passesMode(combo)) continue
     familySurvivors++
   }
-  push('families', 'Never-seen families — touching runs, one decade, one last digit, all multiples of five, even progressions, every 1-2-3-4-x — not already cut',
+  push('families', 'Never-drawn families — five in a row, one last digit, one slip row or diagonal, shared multiples, narrow grid columns, even progressions, every 1-2-3-4-x — not already cut',
     familySurvivors * sk,
-    'cost 0 tested winners here — these shapes never once appeared', true)
+    'cost 0 tested winners — none of these has appeared in 3,535 draws across every era', true)
 
   // Totals at or beyond the era's records, enumerated member by member. The
   // regions are small enough to walk exactly: the low side directly, the high
