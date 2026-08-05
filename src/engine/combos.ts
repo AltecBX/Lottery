@@ -40,6 +40,7 @@ export function buildCombos(
   predictions: NumberPrediction[],
   maxCombos = 8,
   positions: PositionAnalysis | null = null,
+  accept: ((sorted: number[]) => boolean) | null = null,
 ): { best: ComboPrediction | null; alts: ComboPrediction[] } {
   const D = state.D
   if (state.K < D || predictions.length < D) return { best: null, alts: [] }
@@ -74,7 +75,7 @@ export function buildCombos(
     return acc
   }
 
-  interface Scored { numbers: number[]; score: number; pairAvg: number; sumZ: number; posPenalty: number }
+  interface Scored { numbers: number[]; score: number; pairAvg: number; sumZ: number; posPenalty: number; inPool: boolean }
   const combos: Scored[] = []
   const pairsPerCombo = (D * (D - 1)) / 2
   forEachCombination(nums.length, D, (idx) => {
@@ -93,11 +94,15 @@ export function buildCombos(
     const sortedSet = [...set].sort((p, q) => p - q)
     const posPenalty = positionPenalty(sortedSet)
     const score = base + 0.3 * pairAvg - 0.06 * sumZ * sumZ + 0.25 * oddBonus - 0.12 * posPenalty
-    combos.push({ numbers: sortedSet, score, pairAvg, sumZ, posPenalty })
+    combos.push({ numbers: sortedSet, score, pairAvg, sumZ, posPenalty, inPool: accept ? accept(sortedSet) : true })
   })
 
   combos.sort((p, q) => q.score - p.score)
-  const top = combos.slice(0, maxCombos)
+  // Generate from the reduced pool: combinations outside it are only used if
+  // the candidate numbers cannot form enough inside it — the filter must never
+  // be able to silence the prediction entirely.
+  const inPool = combos.filter((c) => c.inPool)
+  const top = inPool.length >= 1 ? inPool.slice(0, maxCombos) : combos.slice(0, maxCombos)
   if (top.length === 0) return { best: null, alts: [] }
   const best = top[0]
 
@@ -119,6 +124,7 @@ export function buildCombos(
     const odd = cb.numbers.filter((v) => v % 2 === 1).length
     notes.push(`${odd} odd · ${D - odd} even`)
     if (positions && cb.posPenalty < 0.5) notes.push('column shape typical')
+    if (accept) notes.push(cb.inPool ? 'inside the reduced pool' : 'outside the reduced pool — best available')
     return {
       numbers: cb.numbers,
       score: cb.score,

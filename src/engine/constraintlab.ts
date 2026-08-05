@@ -586,6 +586,73 @@ export function windowCount(K: number, D: number, W: number): number {
   return total
 }
 
+/**
+ * Combinations with at least `minPairs` adjacent pairs (values differing by 1).
+ *
+ * One family covers every "looks too clustered" example at once: 62-63-64-65-66,
+ * 1-63-64-65-66 and 1-2-3-65-66 all carry three or more adjacencies. The count
+ * is exact: a D-subset of 1..K with exactly t adjacencies can be built
+ * C(D−1,t)·C(K−D+1,D−t) ways.
+ */
+export function adjacencyAtLeast(K: number, D: number, minPairs: number): number {
+  let total = 0
+  for (let t = minPairs; t <= D - 1; t++) total += choose(D - 1, t) * choose(K - D + 1, D - t)
+  return total
+}
+
+/** Every member of the ≥3-adjacency family, for exact ledger dedup. */
+export function* clusteredCombos(K: number, D: number): Generator<number[]> {
+  // A set is its runs: lengths r1..rk (each ≥1, summing to D) placed left to
+  // right with at least one skipped value between runs. Adjacencies = D − k, so
+  // three or more means k ≤ D − 3.
+  const parts: number[] = []
+  const combo: number[] = []
+  function* place(pi: number, start: number): Generator<number[]> {
+    if (pi === parts.length) {
+      yield [...combo]
+      return
+    }
+    const len = parts[pi]
+    const rest = parts.slice(pi + 1).reduce((s, v) => s + v + 1, -1)
+    for (let m = start; m + len - 1 + (rest > 0 ? rest + 1 : 0) <= K; m++) {
+      for (let i = 0; i < len; i++) combo.push(m + i)
+      yield* place(pi + 1, m + len + 1)
+      combo.length -= len
+    }
+  }
+  function* compositions(remaining: number, k: number): Generator<number[]> {
+    if (k === 1) { yield [remaining]; return }
+    for (let first = 1; first <= remaining - (k - 1); first++) {
+      for (const rest of compositions(remaining - first, k - 1)) yield [first, ...rest]
+    }
+  }
+  for (let k = 1; k <= D - 3; k++) {
+    for (const comp of compositions(D, k)) {
+      parts.length = 0
+      parts.push(...comp)
+      yield* place(0, 1)
+    }
+  }
+}
+
+/** Combinations of D from 1..K whose values sum to at most `s` — exact, by DP. */
+export function sumAtMostCount(K: number, D: number, s: number): number {
+  const maxSum = ((2 * K - D + 1) * D) / 2
+  const lim = Math.min(s, maxSum)
+  if (lim < (D * (D + 1)) / 2) return 0
+  const dp = Array.from({ length: D + 1 }, () => new Float64Array(lim + 1))
+  dp[0][0] = 1
+  for (let n = 1; n <= K; n++) {
+    for (let j = D; j >= 1; j--) {
+      const row = dp[j], prev = dp[j - 1]
+      for (let t = lim; t >= n; t--) row[t] += prev[t - n]
+    }
+  }
+  let total = 0
+  for (let t = 0; t <= lim; t++) total += dp[D][t]
+  return Math.round(total)
+}
+
 /** Combinations where at least four numbers share a last digit. */
 export function sameDigitCount(K: number, D: number): number {
   // Two digit-groups of four would need eight numbers, so digits never overlap
@@ -647,16 +714,42 @@ function presetEliminations(draws: Draw[], K: number, D: number, universe: numbe
   let allHigh = 0
   let window10 = 0
   let digit4 = 0
+  let clustered = 0
+  let minSum = Number.POSITIVE_INFINITY
+  let maxSum = 0
   for (const d of draws) {
     if (d.sorted[0] >= topZone) allHigh++
     if (d.sorted[D - 1] - d.sorted[0] <= 9) window10++
     const perDigit = new Array<number>(10).fill(0)
     let maxDigit = 0
-    for (const n of d.sorted) {
+    let adj = 0
+    let total = 0
+    for (let i = 0; i < D; i++) {
+      const n = d.sorted[i]
+      total += n
       const g = ++perDigit[n % 10]
       if (g > maxDigit) maxDigit = g
+      if (i > 0 && n - d.sorted[i - 1] === 1) adj++
     }
     if (maxDigit >= 4) digit4++
+    if (adj >= 3) clustered++
+    if (total < minSum) minSum = total
+    if (total > maxSum) maxSum = total
+  }
+  add('clustered', 'Three or more touching pairs', adjacencyAtLeast(K, D, 3), clustered,
+    'One family holds every "too clustered" case at once: 62-63-64-65-66, 1-63-64-65-66 and 1-2-3-65-66 all live here.')
+  if (Number.isFinite(minSum)) {
+    const below = sumAtMostCount(K, D, minSum - 1)
+    if (below > 0) {
+      add('sumLow', `Total below ${minSum}`, below, 0,
+        `The lowest total ever drawn here is ${minSum} — sorting cannot show this one; it takes the sum column.`)
+    }
+    const arithMax = ((2 * K - D + 1) * D) / 2
+    const above = choose(K, D) - sumAtMostCount(K, D, maxSum)
+    if (above > 0 && maxSum < arithMax) {
+      add('sumHigh', `Total above ${maxSum}`, above, 0,
+        `The highest total ever drawn here is ${maxSum} — the mirror record, equally invisible in a sorted sheet.`)
+    }
   }
   add('allHigh', `Every number ≥ ${topZone}`, choose(K - topZone + 1, D), allHigh,
     'The mirror of the all-low instinct: the whole draw crammed into the top ten.')
@@ -975,6 +1068,48 @@ export interface ReductionLedger {
   repeatExample: { numbers: number[]; first: string; second: string } | null
 }
 
+/** Exact membership test for a mode's context-free rule set. */
+export function modePredicate(lab: ConstraintLab, mode: ConstraintMode): (sorted: number[]) => boolean {
+  const specs = featureSpecs(lab.K, lab.drawSize)
+  const byKey = new Map(specs.map((s, i) => [s.key, i]))
+  const rules = mode.ruleIds
+    .map((id) => lab.rules.find((r) => r.id === id))
+    .filter((r): r is ConstraintRule => !!r)
+    .map((r) => ({ fi: byKey.get(r.featureKey)!, lo: r.lo, hi: r.hi }))
+  if (!rules.length) return () => true
+  return (sorted: number[]): boolean => {
+    const f = extractFeatures(sorted, lab.K, EMPTY_CONTEXT)
+    for (const { fi, lo, hi } of rules) {
+      const v = f[fi]
+      if (Number.isFinite(v) && (v < lo || v > hi)) return false
+    }
+    return true
+  }
+}
+
+/**
+ * The reduced pool as a membership test, for generating predictions inside it:
+ * the mode's shape bands, no already-drawn main-set, and none of the never-seen
+ * families (small next-to-largest, everything under 10, three or more touching
+ * pairs). Exactly the ledger's rows, as a predicate.
+ */
+export function reducedPoolAcceptor(
+  lab: ConstraintLab,
+  mode: ConstraintMode,
+  pastKeys: ReadonlySet<string>,
+): (sorted: number[]) => boolean {
+  const passesMode = modePredicate(lab, mode)
+  const D = lab.drawSize
+  return (sorted: number[]): boolean => {
+    if (sorted[D - 2] <= 5 || sorted[D - 1] <= 9) return false
+    let adj = 0
+    for (let i = 1; i < D; i++) if (sorted[i] - sorted[i - 1] === 1) adj++
+    if (adj >= 3) return false
+    if (pastKeys.has(sorted.join('-'))) return false
+    return passesMode(sorted)
+  }
+}
+
 /** Every k-subset of `arr`, for the tiny families that get enumerated exactly. */
 function* kSubsets(arr: number[], k: number): Generator<number[]> {
   const idx = Array.from({ length: k }, (_, i) => i)
@@ -1018,31 +1153,17 @@ export function reductionLedger(
   const rows: LedgerRow[] = []
   let remaining = start
 
-  // Context-free intervals of the active mode, for exact membership tests
-  const specs = featureSpecs(K, D)
-  const byKey = new Map(specs.map((s, i) => [s.key, i]))
-  const modeRules = mode.ruleIds
-    .map((id) => lab.rules.find((r) => r.id === id))
-    .filter((r): r is ConstraintRule => !!r)
-    .map((r) => ({ fi: byKey.get(r.featureKey)!, lo: r.lo, hi: r.hi }))
-  const passesMode = (sorted: number[]): boolean => {
-    if (!modeRules.length) return true
-    const f = extractFeatures(sorted, K, EMPTY_CONTEXT)
-    for (const { fi, lo, hi } of modeRules) {
-      const v = f[fi]
-      if (Number.isFinite(v) && (v < lo || v > hi)) return false
-    }
-    return true
-  }
+  const passesMode = modePredicate(lab, mode)
+  const modeRuleCount = mode.ruleIds.length
 
   const push = (key: string, label: string, removed: number, winnersNote: string, exact: boolean) => {
     remaining -= removed
     rows.push({ key, label, removed, remaining, winnersNote, exact })
   }
 
-  if (modeRules.length > 0) {
+  if (modeRuleCount > 0) {
     const removed = Math.round(start * (1 - mode.spaceShare))
-    push('mode', `${mode.label} shape bands (${modeRules.length} rules, tested walk-forward)`, removed,
+    push('mode', `${mode.label} shape bands (${modeRuleCount} rules, tested walk-forward)`, removed,
       `kept ${(mode.survival * 100).toFixed(2)}% of ${lab.evaluated.toLocaleString()} unseen winners`, false)
   }
 
@@ -1090,7 +1211,9 @@ export function reductionLedger(
   }
   const top9 = Array.from({ length: Math.min(9, K) }, (_, i) => i + 1)
   for (const combo of kSubsets(top9, D)) addCombo([...combo])
-  for (let m = 1; m + D - 1 <= K; m++) addCombo(Array.from({ length: D }, (_, i) => m + i))
+  // Three or more touching pairs — 62-63-64-65-66, 1-63-64-65-66, 1-2-3-65-66
+  // and every straight run all belong to this one family
+  for (const combo of clusteredCombos(K, D)) addCombo(combo)
 
   let familySurvivors = 0
   for (const combo of family.values()) {
@@ -1098,9 +1221,9 @@ export function reductionLedger(
     if (!passesMode(combo)) continue
     familySurvivors++
   }
-  push('families', `Never-seen families (every 1-2-3-4-x, all inside 1–9, straight runs) not already cut`,
+  push('families', `Clustered and never-seen families (three or more touching pairs, every 1-2-3-4-x, all inside 1–9) not already cut`,
     familySurvivors * sk,
-    'cost 0 tested winners — these shapes have never once appeared', true)
+    'cost 0 tested winners here — these shapes never once appeared', true)
 
   let bonusBackToBack = 0
   for (let i = 1; i < draws.length; i++) {
@@ -1112,7 +1235,7 @@ export function reductionLedger(
     rows,
     remaining,
     remainingShare: remaining / start,
-    winnersKept: modeRules.length ? mode.survival : 1,
+    winnersKept: modeRuleCount ? mode.survival : 1,
     bonusBackToBack,
     mainRepeats,
     repeatExample,
