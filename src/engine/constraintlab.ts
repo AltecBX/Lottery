@@ -727,6 +727,26 @@ export function structuralFamilies(K: number, D: number): {
       note: 'Measured, never cut — this is the family that actually came up.',
     },
     {
+      key: 'column7',
+      label: 'All five in one column of seven',
+      // Residues mod 7: six classes of ten and one of nine at K=69
+      combos: (() => {
+        let t = 0
+        for (let r = 0; r < 7; r++) t += choose(countWhere((n) => (n - 1) % 7 === r), D)
+        return t
+      })(),
+      test: (s) => new Set(s.map((n) => (n - 1) % 7)).size === 1,
+      note: 'Measured, never cut — 16-23-30-44-58 came up on 2016-12-28, every number seven apart in the grid.',
+    },
+    {
+      key: 'wideGaps',
+      // All gaps at least g leaves C(K − (D−1)(g−1), D) ways
+      label: 'Every gap fifteen or wider',
+      combos: choose(K - (D - 1) * 14, D),
+      test: (s) => s.every((n, i) => i === 0 || n - s[i - 1] >= 15),
+      note: 'Measured, never cut — 3-19-35-51-67 again, four gaps of sixteen.',
+    },
+    {
       key: 'allPrime',
       label: 'All five prime',
       combos: choose(countWhere(prime), D),
