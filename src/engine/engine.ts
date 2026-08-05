@@ -6,7 +6,7 @@ import { buildCombos } from './combos.ts'
 import { computeSpecialRawSignals, similarityScores, SIGNAL_LABEL, zNormalize } from './signals.ts'
 import { analyzeRepeats } from './repeats.ts'
 import { analyzePositions, positionalFit } from './positions.ts'
-import { analyzeConstraints } from './constraintlab.ts'
+import { analyzeConstraints, reducedPoolAcceptor } from './constraintlab.ts'
 import { detectEra } from './era.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
@@ -145,12 +145,25 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
   const { predictions } = predictNext(state, ctx, activeWeights, bt.rankHitRate, bt.summary.evaluated, usePosition, bt.mlWeights)
   // Per-column (order-statistic) history — also constrains combination shape
   const positionAnalysis = analyzePositions(draws, K, D, inputSorted)
-  const combos = buildCombos(state, predictions, 8, positionAnalysis)
-  const bestComboFit = combos.best ? positionalFit(positionAnalysis, combos.best.numbers) : null
+
   // Constraint Lab — leak-free by construction: every rule is rebuilt from the
-  // draws before the one it is tested against. Independent of the prediction
-  // engine above, which it neither feeds nor depends on.
+  // draws before the one it is tested against. It runs before the combination
+  // builder so the suggested combinations can be generated from the reduced
+  // pool it defines: the Balanced bands, no already-drawn main-set, none of the
+  // never-seen families. Being in the pool changes no ticket's odds — it keeps
+  // the model from suggesting shapes its own record calls absurd.
   const constraintLab = analyzeConstraints(draws, K, D)
+  let acceptor: ((sorted: number[]) => boolean) | null = null
+  if (constraintLab) {
+    const balanced = constraintLab.modes.find((m) => m.key === 'balanced') ?? constraintLab.modes[0]
+    if (balanced) {
+      const pastKeys = new Set(draws.map((d) => d.sorted.join('-')))
+      acceptor = reducedPoolAcceptor(constraintLab, balanced, pastKeys)
+    }
+  }
+
+  const combos = buildCombos(state, predictions, 8, positionAnalysis, acceptor)
+  const bestComboFit = combos.best ? positionalFit(positionAnalysis, combos.best.numbers) : null
 
   const weightEntries = Object.entries(activeWeights).sort((a, b) => b[1] - a[1])
   const uniform = weightEntries.length > 0 ? 1 / weightEntries.length : 0

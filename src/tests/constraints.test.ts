@@ -4,12 +4,14 @@ import {
   positionIntervalProbability, wilson,
 } from '../engine/constraints.ts'
 import {
-  analyzeConstraints, countRthAtMost, MIN_CONSTRAINT_HISTORY, reductionLedger, sameDigitCount,
-  sampleUniverse, windowCount,
+  adjacencyAtLeast, analyzeConstraints, clusteredCombos, countRthAtMost, MIN_CONSTRAINT_HISTORY,
+  reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, sumAtMostCount, windowCount,
 } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
 import { choose } from '../engine/odds.ts'
 import { buildPortfolio } from '../engine/portfolio.ts'
+import { runEngine } from '../engine/engine.ts'
+import { DEFAULT_SETTINGS } from '../engine/types.ts'
 import { dowOf } from '../engine/dates.ts'
 import type { Draw } from '../engine/types.ts'
 
@@ -498,9 +500,11 @@ describe('the reduction ledger', () => {
     const past = led.rows.find((r) => r.key === 'past')!
     expect(past.removed).toBeLessThanOrEqual(draws.length * 26)
     expect(past.exact).toBe(true)
-    // The mode's Monte Carlo row dominates and the exact rows stay small
+    // The mode's Monte Carlo row dominates and the exact rows stay small:
+    // 1-2-3-4-x (321), all inside 1..9 (126), and the ≥3-adjacency family
+    // (8,385, which contains every straight run), minus overlap and mode cuts
     const families = led.rows.find((r) => r.key === 'families')!
-    expect(families.removed).toBeLessThanOrEqual((321 + 126 + 65) * 26)
+    expect(families.removed).toBeLessThanOrEqual((321 + 126 + 8385) * 26)
     expect(led.remainingShare).toBeGreaterThan(0.8)
     expect(led.remainingShare).toBeLessThan(1)
   })
@@ -517,5 +521,65 @@ describe('the reduction ledger', () => {
     expect(led.repeatExample!.numbers).toEqual(base[50].sorted)
     const past = led.rows.find((r) => r.key === 'past')!
     expect(past.winnersNote).toContain('1 real winner')
+  })
+})
+
+describe('generating the prediction from the reduced pool', () => {
+  it('counts clustered and sum families exactly, against brute force', () => {
+    // adjacency ≥ 3 at small scale
+    const k = 14, d = 5
+    let brute = 0
+    for (let a = 1; a <= k - 4; a++)
+      for (let b = a + 1; b <= k - 3; b++)
+        for (let c = b + 1; c <= k - 2; c++)
+          for (let e = c + 1; e <= k - 1; e++)
+            for (let f = e + 1; f <= k; f++) {
+              const s = [a, b, c, e, f]
+              let adj = 0
+              for (let i = 1; i < 5; i++) if (s[i] - s[i - 1] === 1) adj++
+              if (adj >= 3) brute++
+            }
+    expect(adjacencyAtLeast(k, d, 3)).toBe(brute)
+    const members = [...clusteredCombos(k, d)]
+    expect(members.length).toBe(brute)
+    expect(new Set(members.map((m) => m.join('-'))).size).toBe(brute)
+    // sum DP vs brute force
+    let sumBrute = 0
+    for (let a = 1; a <= k - 2; a++)
+      for (let b = a + 1; b <= k - 1; b++)
+        for (let c = b + 1; c <= k; c++) if (a + b + c <= 20) sumBrute++
+    expect(sumAtMostCount(k, 3, 20)).toBe(sumBrute)
+    // and the mirror symmetry on the real geometry: sum ≤ s ↔ sum ≥ 350 − s
+    expect(sumAtMostCount(69, 5, 50)).toBe(choose(69, 5) - sumAtMostCount(69, 5, 299))
+  })
+
+  it('the acceptor rejects every clustered example and every past winner', () => {
+    const draws = fairDraws(900, 5150)
+    const lab = analyzeConstraints(draws, K, D)!
+    const balanced = lab.modes.find((m) => m.key === 'balanced')!
+    const pastKeys = new Set(draws.map((d) => d.sorted.join('-')))
+    const accept = reducedPoolAcceptor(lab, balanced, pastKeys)
+    expect(accept([62, 63, 64, 65, 66])).toBe(false)
+    expect(accept([1, 63, 64, 65, 66])).toBe(false)
+    expect(accept([1, 2, 3, 65, 66])).toBe(false)
+    expect(accept([1, 2, 3, 4, 50])).toBe(false)  // next-to-largest ≤ 5
+    expect(accept([2, 3, 5, 8, 9])).toBe(false)   // everything under 10
+    expect(accept(draws[100].sorted)).toBe(false) // a past winner
+    // and a normal middle-of-the-space shape passes
+    expect(accept([8, 21, 34, 47, 61])).toBe(true)
+  })
+
+  it('the engine generates its combination inside its own reduced pool', () => {
+    const draws = fairDraws(900, 6001)
+    const res = runEngine(draws, DEFAULT_SETTINGS)
+    expect(res.ok).toBe(true)
+    expect(res.bestCombo).not.toBeNull()
+    const lab = res.constraintLab!
+    const balanced = lab.modes.find((m) => m.key === 'balanced')!
+    const pastKeys = new Set(draws.map((d) => d.sorted.join('-')))
+    const accept = reducedPoolAcceptor(lab, balanced, pastKeys)
+    expect(accept(res.bestCombo!.numbers)).toBe(true)
+    expect(res.bestCombo!.notes).toContain('inside the reduced pool')
+    for (const alt of res.altCombos) expect(accept(alt.numbers)).toBe(true)
   })
 })
