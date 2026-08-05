@@ -577,6 +577,28 @@ export function countRthAtMost(K: number, D: number, r: number, v: number): numb
   return total
 }
 
+/** Combinations whose numbers all fit inside one window of `W` consecutive values. */
+export function windowCount(K: number, D: number, W: number): number {
+  // Count each set once by its minimum: the other D−1 numbers come from the
+  // W−1 values above it (fewer near the top of the pool).
+  let total = 0
+  for (let m = 1; m <= K - 1; m++) total += choose(Math.min(W - 1, K - m), D - 1)
+  return total
+}
+
+/** Combinations where at least four numbers share a last digit. */
+export function sameDigitCount(K: number, D: number): number {
+  // Two digit-groups of four would need eight numbers, so digits never overlap
+  // and a straight sum over digits is exact.
+  let total = 0
+  for (let d = 0; d <= 9; d++) {
+    let c = 0
+    for (let n = 1; n <= K; n++) if (n % 10 === d) c++
+    for (let j = 4; j <= Math.min(D, c); j++) total += choose(c, j) * choose(K - c, D - j)
+  }
+  return total
+}
+
 /**
  * The shapes anyone finds by sorting a spreadsheet of past draws, each priced
  * exactly.
@@ -619,6 +641,30 @@ function presetEliminations(draws: Draw[], K: number, D: number, universe: numbe
     `Needs every number inside 1–${vTop}.`)
   add('run', `All ${D} consecutive`, K - D + 1, startsRun,
     'The 1-2-3-4-5 family — one straight run anywhere in the pool.')
+
+  // The same instinct, pointed at shapes a sorted spreadsheet does not surface
+  const topZone = Math.max(1, K - 9)
+  let allHigh = 0
+  let window10 = 0
+  let digit4 = 0
+  for (const d of draws) {
+    if (d.sorted[0] >= topZone) allHigh++
+    if (d.sorted[D - 1] - d.sorted[0] <= 9) window10++
+    const perDigit = new Array<number>(10).fill(0)
+    let maxDigit = 0
+    for (const n of d.sorted) {
+      const g = ++perDigit[n % 10]
+      if (g > maxDigit) maxDigit = g
+    }
+    if (maxDigit >= 4) digit4++
+  }
+  add('allHigh', `Every number ≥ ${topZone}`, choose(K - topZone + 1, D), allHigh,
+    'The mirror of the all-low instinct: the whole draw crammed into the top ten.')
+  add('window10', 'All inside one 10-number stretch', windowCount(K, D, 10), window10,
+    'Any tight cluster, wherever it sits — 12-14-15-18-21 as much as 1-2-3-4-5.')
+  add('digit4', 'Four share a last digit', sameDigitCount(K, D), digit4,
+    'The 7-17-27-37 family, for every digit.')
+
   add('dates', `Every number ≤ ${dateMax}`, choose(dateMax, D), allDates,
     'The calendar zone. Not rare — but heavily played, because birthdays live here. Sharing risk, not drawing risk.')
 
@@ -895,6 +941,182 @@ function buildPareto(
     points.push({ spaceShare: shares.prefix[k], survival: res.survival, rules: k + 1 })
   }
   return points
+}
+
+/* ───────────────────────── the reduction ledger ───────────────────────── */
+
+export interface LedgerRow {
+  key: string
+  label: string
+  /** Full combinations (main-sets × bonus balls) this row removes */
+  removed: number
+  /** Running remainder after this row */
+  remaining: number
+  /** What the removal cost in real, walk-forward-tested winners */
+  winnersNote: string
+  /** True when the count is an exact enumeration rather than Monte Carlo */
+  exact: boolean
+}
+
+export interface ReductionLedger {
+  /** C(K,D) × bonus pool — every way the machine can land */
+  start: number
+  rows: LedgerRow[]
+  remaining: number
+  /** Share of the full pool still standing */
+  remainingShare: number
+  /** Winner survival of the whole stack, from the walk-forward record */
+  winnersKept: number
+  /** Times the bonus ball repeated its previous value in this history */
+  bonusBackToBack: number
+  /** Draws whose main-set had already been drawn before — the retire-the-past rule's real cost */
+  mainRepeats: number
+  /** The receipt, when a main-set really did repeat */
+  repeatExample: { numbers: number[]; first: string; second: string } | null
+}
+
+/** Every k-subset of `arr`, for the tiny families that get enumerated exactly. */
+function* kSubsets(arr: number[], k: number): Generator<number[]> {
+  const idx = Array.from({ length: k }, (_, i) => i)
+  const n = arr.length
+  if (k > n) return
+  for (;;) {
+    yield idx.map((i) => arr[i])
+    let p = k - 1
+    while (p >= 0 && idx[p] === n - k + p) p--
+    if (p < 0) return
+    idx[p]++
+    for (let q = p + 1; q < k; q++) idx[q] = idx[q - 1] + 1
+  }
+}
+
+/**
+ * The deduction run in full, starting from every combination the machine can
+ * land — mains × bonus pool — and subtracting in order:
+ *
+ *  1. the active mode's shape bands (Monte Carlo, walk-forward-tested),
+ *  2. every main-set already drawn, retired with every bonus ball,
+ *  3. the never-seen families, enumerated combination by combination so the
+ *     overlap with the first two rows is exact and nothing is counted twice.
+ *
+ * Each row carries its cost in real winners from the same walk-forward record,
+ * because a removal is only as good as what it kept. And the final line stays
+ * the final line: the remainder is the list worth choosing from, while any one
+ * ticket inside it is still 1 in the full pool — the draw is made from the
+ * whole space, not from the list.
+ */
+export function reductionLedger(
+  lab: ConstraintLab,
+  mode: ConstraintMode,
+  draws: Draw[],
+  specialK: number,
+): ReductionLedger {
+  const K = lab.K
+  const D = lab.drawSize
+  const sk = Math.max(1, specialK)
+  const start = lab.universe * sk
+  const rows: LedgerRow[] = []
+  let remaining = start
+
+  // Context-free intervals of the active mode, for exact membership tests
+  const specs = featureSpecs(K, D)
+  const byKey = new Map(specs.map((s, i) => [s.key, i]))
+  const modeRules = mode.ruleIds
+    .map((id) => lab.rules.find((r) => r.id === id))
+    .filter((r): r is ConstraintRule => !!r)
+    .map((r) => ({ fi: byKey.get(r.featureKey)!, lo: r.lo, hi: r.hi }))
+  const passesMode = (sorted: number[]): boolean => {
+    if (!modeRules.length) return true
+    const f = extractFeatures(sorted, K, EMPTY_CONTEXT)
+    for (const { fi, lo, hi } of modeRules) {
+      const v = f[fi]
+      if (Number.isFinite(v) && (v < lo || v > hi)) return false
+    }
+    return true
+  }
+
+  const push = (key: string, label: string, removed: number, winnersNote: string, exact: boolean) => {
+    remaining -= removed
+    rows.push({ key, label, removed, remaining, winnersNote, exact })
+  }
+
+  if (modeRules.length > 0) {
+    const removed = Math.round(start * (1 - mode.spaceShare))
+    push('mode', `${mode.label} shape bands (${modeRules.length} rules, tested walk-forward)`, removed,
+      `kept ${(mode.survival * 100).toFixed(2)}% of ${lab.evaluated.toLocaleString()} unseen winners`, false)
+  }
+
+  // Every main-set already drawn, retired with every bonus ball — counting only
+  // sets the bands did not already remove, so nothing is deducted twice.
+  //
+  // This rule's cost is not hypothetical. "It already came out" reads as free
+  // because no one expects a repeat — but the full Powerball record contains
+  // one: 2-13-20-21-23 fell on 2003-02-08 and again on 2008-01-09. Whatever
+  // history is loaded, the real cost is counted from it and reported.
+  const seen = new Map<string, string>()
+  const pastSurvivors: number[][] = []
+  let mainRepeats = 0
+  let repeatExample: ReductionLedger['repeatExample'] = null
+  for (const d of draws) {
+    const key = d.sorted.join('-')
+    const firstDate = seen.get(key)
+    if (firstDate !== undefined) {
+      mainRepeats++
+      if (!repeatExample) repeatExample = { numbers: d.sorted, first: firstDate, second: d.date }
+      continue
+    }
+    seen.set(key, d.date)
+    if (passesMode(d.sorted)) pastSurvivors.push(d.sorted)
+  }
+  push('past', `Every main-set already drawn (${seen.size.toLocaleString()}), with all ${sk} bonus balls`,
+    pastSurvivors.length * sk,
+    mainRepeats === 0
+      ? 'cost 0 tested winners so far — no main-set has repeated in this history'
+      : `would have cost ${mainRepeats} real winner${mainRepeats === 1 ? '' : 's'} — main-sets have repeated here`,
+    true)
+
+  // Never-seen families, enumerated exactly and deduped against everything above
+  const family = new Map<string, number[]>()
+  const addCombo = (combo: number[]) => {
+    const key = combo.join('-')
+    if (!family.has(key)) family.set(key, combo)
+  }
+  const low5 = [1, 2, 3, 4, 5].filter((n) => n <= K)
+  for (const base of kSubsets(low5, Math.min(D - 1, low5.length))) {
+    for (let other = 1; other <= K; other++) {
+      if (base.includes(other)) continue
+      addCombo([...base, other].sort((a, b) => a - b))
+    }
+  }
+  const top9 = Array.from({ length: Math.min(9, K) }, (_, i) => i + 1)
+  for (const combo of kSubsets(top9, D)) addCombo([...combo])
+  for (let m = 1; m + D - 1 <= K; m++) addCombo(Array.from({ length: D }, (_, i) => m + i))
+
+  let familySurvivors = 0
+  for (const combo of family.values()) {
+    if (seen.has(combo.join('-'))) continue
+    if (!passesMode(combo)) continue
+    familySurvivors++
+  }
+  push('families', `Never-seen families (every 1-2-3-4-x, all inside 1–9, straight runs) not already cut`,
+    familySurvivors * sk,
+    'cost 0 tested winners — these shapes have never once appeared', true)
+
+  let bonusBackToBack = 0
+  for (let i = 1; i < draws.length; i++) {
+    if (draws[i].special !== undefined && draws[i].special === draws[i - 1].special) bonusBackToBack++
+  }
+
+  return {
+    start,
+    rows,
+    remaining,
+    remainingShare: remaining / start,
+    winnersKept: modeRules.length ? mode.survival : 1,
+    bonusBackToBack,
+    mainRepeats,
+    repeatExample,
+  }
 }
 
 /* ─────────────────────── inspecting one combination ─────────────────────── */

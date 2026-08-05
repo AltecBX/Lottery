@@ -3,7 +3,10 @@ import {
   ConstraintState, contextAt, EMPTY_CONTEXT, extractFeatures, featureCount, featureSpecs,
   positionIntervalProbability, wilson,
 } from '../engine/constraints.ts'
-import { analyzeConstraints, countRthAtMost, MIN_CONSTRAINT_HISTORY, sampleUniverse } from '../engine/constraintlab.ts'
+import {
+  analyzeConstraints, countRthAtMost, MIN_CONSTRAINT_HISTORY, reductionLedger, sameDigitCount,
+  sampleUniverse, windowCount,
+} from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
 import { choose } from '../engine/odds.ts'
 import { buildPortfolio } from '../engine/portfolio.ts'
@@ -454,5 +457,65 @@ describe('sorted-spreadsheet shapes, priced exactly', () => {
     for (const t of constrained.tickets) {
       expect(banned.has(t.numbers.join('-'))).toBe(false)
     }
+  })
+})
+
+describe('the reduction ledger', () => {
+  it('counts window and same-digit families exactly, against brute force', () => {
+    const k = 16, d = 3
+    let w = 0, dg = 0
+    for (let a = 1; a <= k - 2; a++)
+      for (let b = a + 1; b <= k - 1; b++)
+        for (let c = b + 1; c <= k; c++) {
+          if (c - a <= 4) w++
+          // "at least 4 share a digit" is impossible at D=3; test the D=4 form separately
+        }
+    expect(windowCount(k, d, 5)).toBe(w)
+    const k4 = 30, d4 = 4
+    for (let a = 1; a <= k4 - 3; a++)
+      for (let b = a + 1; b <= k4 - 2; b++)
+        for (let c = b + 1; c <= k4 - 1; c++)
+          for (let e = c + 1; e <= k4; e++) {
+            const per = new Array(10).fill(0)
+            let mx = 0
+            for (const n of [a, b, c, e]) mx = Math.max(mx, ++per[n % 10])
+            if (mx >= 4) dg++
+          }
+    expect(sameDigitCount(k4, d4)).toBe(dg)
+  })
+
+  it('runs the full deduction and never double-counts a combination', () => {
+    const draws = fairDraws(900, 12321)
+    const lab = analyzeConstraints(draws, K, D)!
+    const mode = lab.modes[2]
+    const led = reductionLedger(lab, mode, draws, 26)
+    expect(led.start).toBe(lab.universe * 26)
+    // The rows must reconcile exactly with the remainder
+    const removed = led.rows.reduce((s, r) => s + r.removed, 0)
+    expect(led.start - removed).toBe(led.remaining)
+    expect(led.remaining).toBe(led.rows[led.rows.length - 1].remaining)
+    // Past main-sets: never more than distinct draws × bonus pool
+    const past = led.rows.find((r) => r.key === 'past')!
+    expect(past.removed).toBeLessThanOrEqual(draws.length * 26)
+    expect(past.exact).toBe(true)
+    // The mode's Monte Carlo row dominates and the exact rows stay small
+    const families = led.rows.find((r) => r.key === 'families')!
+    expect(families.removed).toBeLessThanOrEqual((321 + 126 + 65) * 26)
+    expect(led.remainingShare).toBeGreaterThan(0.8)
+    expect(led.remainingShare).toBeLessThan(1)
+  })
+
+  it('reports the real cost of retiring past winners when a main-set repeated', () => {
+    const base = fairDraws(400, 777)
+    // Plant a repeat: the 50th draw's mains appear again near the end
+    const repeat = { ...base[380], numbers: base[50].sorted, sorted: base[50].sorted }
+    const draws = [...base.slice(0, 380), repeat, ...base.slice(381)]
+    const lab = analyzeConstraints(draws, K, D)!
+    const led = reductionLedger(lab, lab.modes[0], draws, 26)
+    expect(led.mainRepeats).toBe(1)
+    expect(led.repeatExample).not.toBeNull()
+    expect(led.repeatExample!.numbers).toEqual(base[50].sorted)
+    const past = led.rows.find((r) => r.key === 'past')!
+    expect(past.winnersNote).toContain('1 real winner')
   })
 })

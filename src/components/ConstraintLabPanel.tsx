@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Draw, EngineResult } from '../engine/types.ts'
 import type { ConstraintMode, ConstraintRule } from '../engine/constraintlab.ts'
-import { inspectCombination } from '../engine/constraintlab.ts'
+import { inspectCombination, reductionLedger } from '../engine/constraintlab.ts'
 import { contextAt } from '../engine/constraints.ts'
 import { formatDate } from '../engine/dates.ts'
 import { SectionCard, Ball, Tile, fmtPct } from './shared.tsx'
@@ -158,6 +158,11 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
     return inspectCombination(lab, mode, res.bestCombo.numbers, contextAt(draws, draws.length))
   }, [lab, mode, res.bestCombo, draws])
 
+  const ledger = useMemo(() => {
+    if (!lab || !mode) return null
+    return reductionLedger(lab, mode, draws, res.special?.K ?? 1)
+  }, [lab, mode, draws, res.special?.K])
+
   if (!lab || !mode) {
     return (
       <SectionCard
@@ -299,6 +304,54 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
             denominator are balls the game no longer has, and those are already applied
             {lab.eraTrim ? ` — that is what the trim above to the ${big(lab.eraTrim.currentMax)}-ball era does` : ''}.
             Everything else decides <em>which</em> tickets to play, never how likely they are.
+          </p>
+        </>
+      )}
+
+      {ledger && (
+        <>
+          <div className="mini-title" style={{ marginTop: 18 }}>The pool, reduced — the full deduction</div>
+          <div className="cl-ledger">
+            <div className="cl-ledger-row cl-ledger-start">
+              <span className="cl-ledger-label">Every way the machine can land</span>
+              <span className="cl-ledger-num"><b>{big(ledger.start)}</b></span>
+            </div>
+            {ledger.rows.map((r) => (
+              <div className="cl-ledger-row" key={r.key}>
+                <span className="cl-ledger-label">
+                  {r.label}
+                  <span className="sub">{r.winnersNote}{r.exact ? '' : ' · measured, not enumerated'}</span>
+                </span>
+                <span className="cl-ledger-num">
+                  <i>−{big(r.removed)}</i>
+                  <b>{big(r.remaining)}</b>
+                </span>
+              </div>
+            ))}
+            <div className="cl-ledger-row cl-ledger-end">
+              <span className="cl-ledger-label">
+                Left to choose from
+                <span className="sub">
+                  {fmtPct(ledger.remainingShare, 2)} of the pool · keeping {fmtPct(ledger.winnersKept, 2)} of the winners
+                  the walk-forward test could check
+                </span>
+              </span>
+              <span className="cl-ledger-num"><b>{big(ledger.remaining)}</b></span>
+            </div>
+          </div>
+          <p className="hint" style={{ display: 'block', marginTop: 10 }}>
+            This remainder is the list worth picking tickets from — the suggested tickets already come from it. What it
+            is not is better odds: the draw is made from all {big(ledger.start)}, so any single ticket inside the list
+            is still 1 in {big(ledger.start)}. And the "already came out" rule is not actually safe, just slow to fail.
+            {ledger.repeatExample && (
+              <> It has already failed once in this very history:{' '}
+              <b>{ledger.repeatExample.numbers.join('-')}</b> was drawn on {formatDate(ledger.repeatExample.first)} and
+              drawn <em>again</em> on {formatDate(ledger.repeatExample.second)}.</>
+            )}
+            {' '}Where the space is small enough to watch, it fails on sight: the bonus ball repeated its previous
+            value <b>{ledger.bonusBackToBack}</b> times in this history, and every one of its values has appeared dozens
+            of times. Retiring drawn combinations only looks safe because {big(ledger.start)} is too big to catch it
+            failing often.
           </p>
         </>
       )}

@@ -1183,6 +1183,24 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   font-size: 11.5px; color: var(--muted); margin: 1px 67px 0 35px;
 }
 
+.cl-ledger {
+  border: 1px solid var(--border); border-radius: 13px; overflow: hidden;
+}
+.cl-ledger-row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 9px 12px;
+}
+.cl-ledger-row + .cl-ledger-row { border-top: 1px solid var(--border); }
+.cl-ledger-label { font-size: 13px; font-weight: 600; min-width: 0; }
+.cl-ledger-label .sub { display: block; font-weight: 500; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+.cl-ledger-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; }
+.cl-ledger-num i { display: block; font-style: normal; font-size: 12px; color: var(--bad-text); }
+.cl-ledger-num b { font-size: 13.5px; }
+.cl-ledger-start { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.cl-ledger-start .cl-ledger-num b { font-size: 15px; }
+.cl-ledger-end { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.cl-ledger-end .cl-ledger-num b { font-size: 16px; color: var(--gold); }
+
 .cl-presets { display: grid; gap: 8px; }
 .cl-preset {
   border: 1px solid var(--border); border-radius: 12px; padding: 9px 12px;
