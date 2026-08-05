@@ -681,6 +681,19 @@ export function windowCount(K: number, D: number, W: number): number {
  * On a full Powerball era every one of them lands on its expected count, which
  * is the fair-lottery identity turning up again in a different disguise.
  */
+/**
+ * Widest even step that still gets cut.
+ *
+ * A progression stepping by 1..11 — 1-7-13-19-25, 5-10-15-20-25, 2-6-10-14-18 —
+ * has never been drawn in the whole record. Neither has one stepping by 12..17,
+ * except the one that has: 3-19-35-51-67, step sixteen, on 2026-04-29. So this
+ * boundary is not a principle, it is where the single observed hit happens to
+ * sit, and the honest consequence is that the parent family stays measured
+ * rather than cut. Kept as one constant so the family test, the exact count and
+ * the ledger's enumeration can never drift apart.
+ */
+export const MAX_CUT_STEP = 11
+
 export function structuralFamilies(K: number, D: number): {
   key: string
   label: string
@@ -705,6 +718,8 @@ export function structuralFamilies(K: number, D: number): {
   for (let g = 0; g <= 9; g++) sameDigit += choose(countWhere((n) => n % 10 === g), D)
   let spaced = 0
   for (let step = 1; step <= Math.floor((K - 1) / (D - 1)); step++) spaced += K - step * (D - 1)
+  let tightSpaced = 0
+  for (let step = 1; step <= MAX_CUT_STEP; step++) tightSpaced += Math.max(0, K - step * (D - 1))
 
   return [
     {
@@ -733,7 +748,17 @@ export function structuralFamilies(K: number, D: number): {
       label: 'Evenly spaced across the pool',
       combos: spaced,
       test: (s) => { const g = s[1] - s[0]; return s.every((n, i) => i === 0 || n - s[i - 1] === g) },
-      note: 'Measured, never cut — this is the family that actually came up.',
+      note: 'Measured, never cut — the parent family, and it did come up: 3-19-35-51-67 on 2026-04-29.',
+    },
+    {
+      key: 'evenStepTight',
+      label: `Evenly spaced, steps of ${MAX_CUT_STEP} or less`,
+      combos: tightSpaced,
+      test: (s) => {
+        const g = s[1] - s[0]
+        return g <= MAX_CUT_STEP && s.every((n, i) => i === 0 || n - s[i - 1] === g)
+      },
+      note: `Every step from 1 to ${MAX_CUT_STEP} — 1-7-13-19-25, 5-10-15-20-25, 2-6-10-14-18 — and not one has ever been drawn. But the line sits at ${MAX_CUT_STEP} only because the one progression this machine did draw steps by sixteen, so the wider steps stay in. That boundary was read off the record rather than derived, which is why the parent family above stays measured and uncut beside it.`,
     },
     {
       // A Powerball slip is five columns of fourteen, so one slip row is a
@@ -828,7 +853,7 @@ export function structuralFamilies(K: number, D: number): {
 }
 
 /** The families safe enough to leave out of the pool: tiny, and never observed. */
-export const CUT_FAMILIES = new Set(['oneDecade', 'mult5', 'sameDigit', 'slipRow', 'squareCube', 'fib', 'digitSum', 'tightSpan'])
+export const CUT_FAMILIES = new Set(['oneDecade', 'mult5', 'sameDigit', 'slipRow', 'squareCube', 'fib', 'digitSum', 'tightSpan', 'evenStepTight'])
 
 /**
  * Combinations with at least `minPairs` adjacent pairs (values differing by 1).
@@ -1706,6 +1731,15 @@ export function reductionLedger(
     const digitSum = (n: number) => String(n).split('').reduce((a, c) => a + Number(c), 0)
     for (let v = 1; v <= 20; v++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => digitSum(n) === v))
     for (const g of groups) for (const combo of kSubsets(g, D)) addCombo([...combo])
+    // Even progressions are the one cut family that is not "all D from a single
+    // small set", so the group walk above cannot reach them. Enumerate each
+    // step's members directly — a few hundred combinations, and dedup against
+    // everything already collected keeps the ledger's arithmetic exact.
+    for (let step = 1; step <= MAX_CUT_STEP; step++) {
+      for (let a = 1; a + (D - 1) * step <= K; a++) {
+        addCombo(Array.from({ length: D }, (_, i) => a + i * step))
+      }
+    }
     void walk
   }
   // Three or more touching pairs — 62-63-64-65-66, 1-63-64-65-66, 1-2-3-65-66
@@ -1718,7 +1752,7 @@ export function reductionLedger(
     if (!passesMode(combo)) continue
     familySurvivors++
   }
-  push('families', 'Never-seen families — touching runs, one decade, one last digit, all multiples of five, every 1-2-3-4-x — not already cut',
+  push('families', 'Never-seen families — touching runs, one decade, one last digit, all multiples of five, even progressions, every 1-2-3-4-x — not already cut',
     familySurvivors * sk,
     'cost 0 tested winners here — these shapes never once appeared', true)
 
