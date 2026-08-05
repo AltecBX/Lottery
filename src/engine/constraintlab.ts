@@ -1011,11 +1011,13 @@ export function structuralFamilies(K: number, D: number): {
  * The families safe enough to leave out of the pool: tiny, and never drawn in
  * the whole recorded history of the game — every era, not just this one.
  *
- * Scoping the check to the current era was hiding real precedent. Three or more
- * touching pairs has come up three times against an expected 4.73, one of them
- * 27-49-50-51-52 on 2019-02-20 inside this very era; an eight-number span came
- * up on 2015-09-09; one decade on 2003-02-22; all multiples of five on
- * 2009-10-14. Each landed within ordinary noise of its own count, which is the
+ * Four families were cut here that should not have been, for two separate
+ * reasons. One decade (2003-02-22), all multiples of five (2009-10-14) and an
+ * eight-number span (2015-09-09) were each drawn in a retired era, and scoping
+ * the never-seen check to the current era hid all three. Three or more touching
+ * pairs needs no such excuse: 27-49-50-51-52 fell on 2019-02-20, inside this
+ * era, and the table was already reporting it as seen once when the family was
+ * cut anyway. Each landed within ordinary noise of its own count, which is the
  * fair-lottery identity again: a shape shows up at the rate its size predicts,
  * and being able to name it afterwards does not make it rare. All four are
  * measured here rather than cut, and only the five-in-a-row shape they contain
