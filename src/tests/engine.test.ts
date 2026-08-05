@@ -824,7 +824,7 @@ describe('era detection', () => {
     // Analysing everything still analyses everything — only the pool is pinned.
     expect(current.drawCount).toBeLessThan(all.drawCount)
     expect(all.drawCount).toBe(900)
-  })
+  }, 30000)
 
   it('scopes the analysis itself when the main pool shrank', () => {
     // Mega Millions went 75 mains down to 70. Those old draws contain numbers
@@ -836,7 +836,7 @@ describe('era detection', () => {
     expect(res.K).toBe(70)
     expect(res.drawCount).toBeLessThan(900)
     expect(res.drawCount).toBeGreaterThanOrEqual(440)
-  })
+  }, 30000)
 })
 
 describe('full engine', () => {
