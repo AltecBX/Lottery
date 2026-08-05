@@ -32,7 +32,6 @@ export const SIGNAL_META: SignalMeta[] = [
   { key: 'repeat', label: 'Repeat from last draw', short: 'Repeat', description: 'Empirical probability of appearing given the number was (or was not) in the previous draw.' },
   { key: 'follower', label: 'Follows previous numbers', short: 'Followers', description: 'How often this number historically appeared right after the numbers in the previous draw.' },
   { key: 'followerDow', label: 'Day + previous draw', short: 'Day+prev', description: 'Follower relationship measured only on the target day of week.' },
-  { key: 'position', label: 'Position fit', short: 'Position', description: 'Fit against the per-position value distributions of the source feed.' },
   { key: 'similarity', label: 'Similar situations', short: 'Similarity', description: 'What came next in the most similar historical situations (previous draw, weekday, draw shape).' },
   { key: 'mlModel', label: 'Learned combiner (regression)', short: 'ML combiner', description: 'An online multinomial-regression model trained draw-by-draw on every signal at once — it learns how the signals interact instead of treating them independently.' },
 ]
@@ -43,8 +42,8 @@ export const ML_KEY = 'mlModel'
 export const SIGNAL_LABEL: Record<string, SignalMeta> = Object.fromEntries(SIGNAL_META.map((s) => [s.key, s]))
 
 /** The signal keys computeRawSignals will produce for a given configuration. */
-export function signalKeys(usePosition: boolean): string[] {
-  return SIGNAL_META.map((m) => m.key).filter((k) => usePosition || k !== 'position')
+export function signalKeys(_usePosition: boolean): string[] {
+  return SIGNAL_META.map((m) => m.key)
 }
 
 function gauss(z: number): number {
@@ -125,7 +124,7 @@ export function similarityScores(
 }
 
 /** Compute every raw signal for the given context. Uses ONLY data inside `state`. */
-export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePosition: boolean): RawSignal[] {
+export function computeRawSignals(state: HistoryState, ctx: SignalContext, _usePosition: boolean): RawSignal[] {
   const K = state.K
   const D = state.D
   const S = K + 1
@@ -258,13 +257,17 @@ export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePo
     const raw = new Float64Array(S)
     if (ctx.prev && n >= 2) {
       const inPrev = new Set(ctx.prev.sorted)
+      // Draw 0 followed nothing, so its numbers belong to neither conditional —
+      // counting them as "appeared after an i-free draw" inflated that rate by
+      // 1/(opportunities+25) for every number in the first draw, forever.
+      const inFirst = new Set(state.history[0].sorted)
       const m = 25
       for (let i = 1; i <= K; i++) {
         const p = state.rate(i, 20)
         if (inPrev.has(i)) {
           raw[i] = (state.repeatCount[i] + m * p) / (state.transOpp[i] + m)
         } else {
-          const misses = state.counts[i] - state.repeatCount[i]
+          const misses = state.counts[i] - state.repeatCount[i] - (inFirst.has(i) ? 1 : 0)
           const opp = n - 1 - state.transOpp[i]
           raw[i] = (misses + m * p) / (Math.max(0, opp) + m)
         }
@@ -307,19 +310,20 @@ export function computeRawSignals(state: HistoryState, ctx: SignalContext, usePo
     }
     push('followerDow', raw)
   }
-  // position: probability mass across the positional value distributions
-  if (usePosition) {
-    const raw = new Float64Array(S)
-    const alpha = 2
-    for (let i = 1; i <= K; i++) {
-      let acc = 0
-      for (let p = 0; p < D; p++) {
-        acc += (state.posCounts[p * S + i] + alpha * (1 / K)) / (n + alpha)
-      }
-      raw[i] = acc
-    }
-    push('position', raw)
-  }
+  // The 'position' signal was removed after it was proven to carry nothing.
+  // Summing per-position rates gives Σ_p posCounts[p][i] = counts[i], an affine
+  // map of overall frequency that z-normalizes to exactly freqAll (measured:
+  // max |Δz| = 1.3e-15 on real data). And no repair exists, because for the
+  // question this signal feeds — will number i appear? — the answer *is* the
+  // marginal: P(i appears) = Σ_p P(position p = i) by definition, so any
+  // per-number statistic built from positional counts collapses back to
+  // frequency (the max form collapses too whenever positions use disjoint
+  // ranges, which is exactly when positional structure is strongest). Keeping
+  // it meant feeding the ensemble the same feature twice under two names and
+  // handing the regression a perfectly collinear column. Positional shape is
+  // real information at the combination level, and that is where it is used —
+  // the order-statistic model in positions.ts constrains which combinations
+  // are suggested.
   // similarity
   {
     const { raw } = similarityScores(state, ctx)

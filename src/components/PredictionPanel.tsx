@@ -44,6 +44,7 @@ export function PredictionPanel({ res, gameName, game, draws, drawTime, feed, on
         <span className="hero-date">
           {DOW_NAMES[res.nextDow]}, {formatDate(res.nextDate)} · {drawTimeLabel(game?.syncKey, drawTime)} ·
           {' '}learned from {res.drawCount.toLocaleString()} draws
+          {res.constraintLab?.eraTrim ? ` on today's rules (since ${formatDate(res.constraintLab.eraTrim.cutoffDate)})` : ''}
         </span>
         <span style={{ marginLeft: 'auto' }}>
           <button className="btn sm" onClick={() => void share()}>{shared ? '✓ Copied' : '↗ Share picks'}</button>

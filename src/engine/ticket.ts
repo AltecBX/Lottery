@@ -46,7 +46,10 @@ export function gradeTicket(
   const hasSpecial = draw.special !== undefined && ticket.special !== undefined
   const specialHit = hasSpecial && draw.special === ticket.special
 
-  const jackpot = mains === drawSize && (!hasSpecial || specialHit)
+  // A ticket saved without its bonus ball in a bonus-ball game cannot be shown
+  // to have won the jackpot, so it grades at the all-mains tier instead — the
+  // floor of what is provable, not the ceiling of what is possible.
+  const jackpot = mains === drawSize && (draw.special === undefined || specialHit)
   if (jackpot) {
     return {
       mains, specialHit, jackpot: true,

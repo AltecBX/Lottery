@@ -228,7 +228,9 @@ export function scorePortfolio(
       for (const n of t.numbers) m += mask[n]
       if (m > best) best = m
       const sp = specialK > 0 && t.special === specialDrawn ? 1 : 0
-      if (prizeAt[m * 2 + sp] > 0) paid = 1
+      // The jackpot tier lives outside the prize table, so a trial that matches
+      // everything must still count as a win — "any prize" includes the top one.
+      if (prizeAt[m * 2 + sp] > 0 || (m === D && (specialK === 0 || sp === 1))) paid = 1
     }
     if (best >= 3) hit3++
     if (best >= 4) hit4++
