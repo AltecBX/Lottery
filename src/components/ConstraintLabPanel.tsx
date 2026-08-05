@@ -271,6 +271,38 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
       <div className="mini-title" style={{ marginTop: 18 }}>Where each drawn number lands</div>
       <PositionMap lab={lab} pick={res.bestCombo?.numbers ?? null} />
 
+      {lab.presets.length > 0 && (
+        <>
+          <div className="mini-title" style={{ marginTop: 18 }}>The shapes you can spot by sorting — priced exactly</div>
+          <div className="cl-presets">
+            {lab.presets.map((p) => (
+              <div className="cl-preset" key={p.key}>
+                <div className="cl-preset-head">
+                  <span className="cl-preset-name">{p.label}</span>
+                  <span className="cl-preset-combos">{big(p.combos)} combos<span className="sub"> · {p.share >= 0.001 ? fmtPct(p.share, 1) : `${(p.share * 100).toFixed(4)}%`} of the space</span></span>
+                </div>
+                <div className="cl-preset-figs">
+                  seen <b>{p.observed}</b> · fairness expected <b>{p.expected < 10 ? p.expected.toFixed(2) : Math.round(p.expected).toLocaleString()}</b>
+                  <span className="sub"> — {p.note}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="hint" style={{ display: 'block', marginTop: 10 }}>
+            Sorting past draws by a column and seeing "the last number is never small" feels like a discovery about the
+            machine. It is a discovery about counting: these shapes almost never appear because almost no combinations
+            <em> have</em> them — the "seen" column lands exactly where the combination count predicts, every time.
+            That is also why crossing them off cannot move the odds. Remove every shape above, past winners included,
+            and you have cleared about {fmtPct(lab.presets.reduce((s, p) => s + p.share, 0), 2)} of the space — but the
+            winner had that same {fmtPct(lab.presets.reduce((s, p) => s + p.share, 0), 2)} chance of being there, so
+            what you give up exactly pays for what you remove. The only eliminations that genuinely shrink the
+            denominator are balls the game no longer has, and those are already applied
+            {lab.eraTrim ? ` — that is what the trim above to the ${big(lab.eraTrim.currentMax)}-ball era does` : ''}.
+            Everything else decides <em>which</em> tickets to play, never how likely they are.
+          </p>
+        </>
+      )}
+
       {mode.funnel.length > 0 && (
         <>
           <div className="mini-title" style={{ marginTop: 16 }}>What each rule removes</div>
