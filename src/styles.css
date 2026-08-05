@@ -1361,3 +1361,16 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
    Pinning the column to minmax(0,1fr) lets the contents shrink instead. */
 .play-card { grid-template-columns: minmax(0, 1fr); }
 .play-card > * { min-width: 0; }
+
+.cl-fair-tests { display: grid; gap: 7px; }
+.cl-fair-row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  border: 1px solid var(--border); border-radius: 12px; padding: 8px 11px;
+}
+.cl-fair-row.flag { border-color: color-mix(in srgb, var(--overdue) 45%, var(--border)); }
+.cl-fair-name { font-size: 13px; font-weight: 620; min-width: 0; }
+.cl-fair-name .sub { display: block; font-weight: 500; font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+.cl-fair-z { text-align: right; flex: 0 0 auto; }
+.cl-fair-z b { display: block; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+.cl-fair-z i { font-style: normal; font-size: 11.5px; color: var(--muted); }
+.cl-fair-row.flag .cl-fair-z b { color: var(--overdue); }
