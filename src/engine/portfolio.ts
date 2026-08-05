@@ -108,6 +108,12 @@ function weightedSubset(
 const TICKET_TRIES = 1200
 
 /**
+ * How far below the best a ticket may score and still count as its equal,
+ * as a fraction of the spread one ticket can span. See `pickTicket`.
+ */
+const TIE_SLACK = 0.02
+
+/**
  * Choose one ticket: the best-scoring combination that both looks like a draw
  * of this game and introduces exactly `fresh` numbers no earlier ticket used.
  *
@@ -148,30 +154,60 @@ function pickTicket(
     ...unusedPool.slice().sort(byValue).slice(0, wantFresh + topUp),
     ...usedPool.slice().sort(byValue).slice(0, wantRepeat),
   ].sort((a, b) => a - b)
-  let best = greedy
-  let bestValue = (!shape || inShape(greedy, shape)) && allowed(greedy)
-    ? greedy.reduce((s, n) => s + scores[n], 0)
-    : -Infinity
 
-  if (shape) {
-    const cand: number[] = []
-    const partA: number[] = []
-    const partB: number[] = []
-    for (let t = 0; t < TICKET_TRIES; t++) {
-      weightedSubset(weights, unusedPool, wantFresh + topUp, rnd, partA)
-      weightedSubset(weights, usedPool, wantRepeat, rnd, partB)
-      cand.length = 0
-      cand.push(...partA, ...partB)
-      cand.sort((a, b) => a - b)
-      if (!inShape(cand, shape) || !allowed(cand)) continue
-      let v = 0
-      for (const n of cand) v += scores[n]
-      if (v > bestValue) { bestValue = v; best = cand.slice() }
+  /*
+   * The highest total this split can reach, valid or not — the anchor the
+   * search measures against. It never moves, so "near-optimal" means the same
+   * thing on every trial.
+   *
+   * Anything within `slack` of it is treated as an equal and one is chosen at
+   * random, which is both what makes a re-deal actually re-deal and the honest
+   * reading of the scores. Seeding the search with `greedy` and keeping strict
+   * argmax froze every ticket whose greedy pick happened to be in shape: greedy
+   * IS the maximum, so no sampled candidate could ever beat it and the seed
+   * changed nothing. On a live model that pinned the first two of five tickets
+   * across every re-deal.
+   *
+   * The slack is a fraction of the spread a whole ticket can span, D·(hi−lo),
+   * so it scales with the scores and works whether they are probabilities or
+   * z-scores. At 2% of that span it admits combinations within about half a
+   * percent of the best — 77 of them on a live Powerball model, against a top-1
+   * to top-25 score gap of 11%, which is well inside the noise those scores
+   * carry anyway.
+   */
+  const slack = TIE_SLACK * D * range
+  const anchor = greedy.reduce((s, n) => s + scores[n], 0)
+  const greedyOk = (!shape || inShape(greedy, shape)) && allowed(greedy)
+  let best: number[] | null = greedyOk ? greedy : null
+  let ties = greedyOk ? 1 : 0
+  // Kept only for the case where nothing at all reaches the near-optimal band.
+  let fallback: number[] | null = best
+  let fallbackValue = greedyOk ? anchor : -Infinity
+
+  const cand: number[] = []
+  const partA: number[] = []
+  const partB: number[] = []
+  for (let t = 0; t < TICKET_TRIES; t++) {
+    weightedSubset(weights, unusedPool, wantFresh + topUp, rnd, partA)
+    weightedSubset(weights, usedPool, wantRepeat, rnd, partB)
+    cand.length = 0
+    cand.push(...partA, ...partB)
+    cand.sort((a, b) => a - b)
+    if ((shape && !inShape(cand, shape)) || !allowed(cand)) continue
+    let v = 0
+    for (const n of cand) v += scores[n]
+    if (v >= anchor - slack) {
+      // Reservoir sampling: every near-optimal candidate is equally likely to
+      // be the one returned, so the deal is genuinely re-dealt.
+      ties++
+      if (rnd() * ties < 1) best = cand.slice()
     }
+    if (v > fallbackValue) { fallbackValue = v; fallback = cand.slice() }
   }
 
-  for (const n of best) used[n]++
-  return best
+  const chosen = best ?? fallback ?? greedy
+  for (const n of chosen) used[n]++
+  return chosen
 }
 
 /** Uniformly sample D distinct numbers from 1..K (partial Fisher–Yates). */
@@ -330,6 +366,20 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
   for (let s = 1; s <= specialK; s++) {
     if (!seenSpecial.has(s)) { seenSpecial.add(s); specialOrder.push(s) }
   }
+  /*
+   * Where in that ranking the set starts. Without this the bonus balls were
+   * `specialOrder[t]` — the same five, in the same order, on every deal no
+   * matter the seed, so a re-deal visibly changed the mains and left the bonus
+   * column untouched.
+   *
+   * Rotating rather than reranking costs almost nothing: the bonus model picks
+   * its top ball 4.13% of the time against 3.85% by chance, so which slice of
+   * the ranking a set takes is worth about a quarter of a percentage point —
+   * far less than the deal genuinely being a different deal.
+   */
+  const specialShift = specialOrder.length > 0
+    ? Math.floor(mulberry32(seed ^ 0x5bf03635)() * specialOrder.length) % specialOrder.length
+    : 0
 
   const shape = opts.shape ?? null
 
@@ -359,7 +409,9 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
     const ticket: PortfolioTicket = { numbers }
     if (specialK > 0) {
       // At zero spread every ticket is one pick repeated, bonus ball included
-      ticket.special = spread === 0 ? specialOrder[0] : specialOrder[t % specialOrder.length]
+      ticket.special = spread === 0
+        ? specialOrder[specialShift]
+        : specialOrder[(specialShift + t) % specialOrder.length]
     }
     tickets.push(ticket)
   }

@@ -1296,7 +1296,9 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   font-size: 12.5px; font-weight: 700; color: var(--muted);
   border: 1px solid var(--border);
 }
-.play-ticket .btn { flex: 0 0 auto; min-width: 44px; min-height: 40px; }
+/* 44px square: the save star is the smallest thing on the busiest screen, and
+   40px tall put it under the minimum comfortable touch target. */
+.play-ticket .btn { flex: 0 0 auto; min-width: 44px; min-height: 44px; }
 .play-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .play-actions .btn { flex: 1 1 auto; min-height: 46px; }
 .play-hint { display: block; }
