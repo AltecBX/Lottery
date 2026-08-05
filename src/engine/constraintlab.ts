@@ -833,8 +833,9 @@ export const CUT_FAMILIES = new Set(['oneDecade', 'mult5', 'sameDigit', 'slipRow
 /**
  * Combinations with at least `minPairs` adjacent pairs (values differing by 1).
  *
- * One family covers every "looks too clustered" example at once: 62-63-64-65-66,
- * 1-63-64-65-66 and 1-2-3-65-66 all carry three or more adjacencies. The count
+ * One family covers every "looks too clustered" example at once: five in a row
+ * like 14-15-16-17-18, four in a row plus a stray like 1-2-3-4-6 or 1-2-3-4-50,
+ * and split runs like 1-2-3-65-66 all carry three or more adjacencies. The count
  * is exact: a D-subset of 1..K with exactly t adjacencies can be built
  * C(D−1,t)·C(K−D+1,D−t) ways.
  */
@@ -1008,7 +1009,7 @@ function presetEliminations(
     if (total > maxSum) maxSum = total
   }
   add('clustered', 'Three or more touching pairs', adjacencyAtLeast(K, D, 3), clustered,
-    'One family holds every "too clustered" case at once: 62-63-64-65-66, 1-63-64-65-66 and 1-2-3-65-66 all live here.')
+    'One family holds every "too clustered" case: five in a row like 14-15-16-17-18, four in a row plus one like 1-2-3-4-6, and split runs like 1-2-3-65-66.')
   if (Number.isFinite(minSum)) {
     const below = sumAtMostCount(K, D, minSum - 1)
     if (below > 0) {
