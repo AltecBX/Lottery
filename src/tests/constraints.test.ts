@@ -5,7 +5,7 @@ import {
 } from '../engine/constraints.ts'
 import {
   adjacencyAtLeast, analyzeConstraints, clusteredCombos, countRthAtMost, MIN_CONSTRAINT_HISTORY,
-  CUT_FAMILIES, MAX_CUT_STEP, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
+  CUT_FAMILIES, MAX_CUT_STEP, narrowGroups, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
   positionBandCount, sumAtMostCount, sumBoundedCombos, windowCount,
 } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
@@ -18,6 +18,18 @@ import type { Draw } from '../engine/types.ts'
 
 const K = 69
 const D = 5
+
+/** Every k-subset of `arr`, so a test can walk a family member by member. */
+function subsets(arr: readonly number[], k: number): number[][] {
+  const out: number[][] = []
+  const pick: number[] = []
+  const walk = (start: number) => {
+    if (pick.length === k) { out.push([...pick]); return }
+    for (let i = start; i < arr.length; i++) { pick.push(arr[i]); walk(i + 1); pick.pop() }
+  }
+  walk(0)
+  return out
+}
 
 /**
  * A fair machine: every combination equally likely, no structure whatsoever.
@@ -680,31 +692,107 @@ describe('screening new pattern families', () => {
     const fams = structuralFamilies(K, D)
     const cut = fams.filter((f) => CUT_FAMILIES.has(f.key))
     const kept = fams.filter((f) => !CUT_FAMILIES.has(f.key))
-    expect(cut.map((f) => f.key).sort())
-      .toEqual(['digitSum', 'evenStepTight', 'fib', 'mult5', 'oneDecade', 'sameDigit', 'slipRow', 'squareCube', 'tightSpan'])
+    expect(cut.map((f) => f.key).sort()).toEqual([
+      'digitSum', 'evenStepTight', 'fib', 'gridColumn', 'powerTwo', 'repdigit', 'runFive',
+      'sameDigit', 'sameMultiple', 'slipDiagonal', 'slipRow', 'squareCube', 'twoDigits',
+    ])
     for (const f of cut) expect(f.combos / choose(K, D)).toBeLessThan(0.0002)
     expect(kept.find((f) => f.key === 'evenSpaced')!.test([3, 19, 35, 51, 67])).toBe(true)
+
+    // The three shapes that look impossible and happened anyway. Each is small
+    // enough that a threshold read off the sheet would have cut it, and each
+    // would have thrown away a real jackpot.
+    expect(kept.find((f) => f.key === 'mirrorPool')!.test([3, 19, 35, 51, 67])).toBe(true)
+    expect(kept.find((f) => f.key === 'fibLike')!.test([1, 3, 4, 7, 11])).toBe(true)
+    expect(kept.find((f) => f.key === 'triangular')!.test([3, 21, 28, 36, 45])).toBe(true)
+    for (const k of ['mirrorPool', 'fibLike', 'triangular']) expect(CUT_FAMILIES.has(k)).toBe(false)
 
     const draws = fairDraws(900, 4711)
     const lab = analyzeConstraints(draws, K, D)!
     const balanced = lab.modes.find((m) => m.key === 'balanced')!
     const accept = reducedPoolAcceptor(lab, balanced, new Set())
-    expect(accept([41, 43, 46, 47, 49])).toBe(false)   // one decade
-    expect(accept([10, 25, 40, 55, 65])).toBe(false)   // multiples of five
     expect(accept([7, 17, 27, 37, 47])).toBe(false)    // one last digit
     expect(accept([1, 15, 29, 43, 57])).toBe(false)    // a line across the play slip
     expect(accept([1, 4, 9, 16, 25])).toBe(false)      // squares
     expect(accept([2, 3, 5, 8, 13])).toBe(false)       // Fibonacci
     expect(accept([9, 18, 27, 36, 45])).toBe(false)    // one digit sum
-    expect(accept([14, 15, 16, 17, 18])).toBe(false)   // five in a row
-    expect(accept([1, 2, 3, 4, 6])).toBe(false)        // four in a row plus one
-    expect(accept([14, 16, 18, 20, 21])).toBe(false)   // clustered without adjacency
+    expect(accept([14, 15, 16, 17, 18])).toBe(false)   // five in a row — no precedent anywhere
+    expect(accept([1, 2, 3, 4, 6])).toBe(false)        // the fourth ball cannot be a 4
     expect(accept([3, 19, 35, 51, 67])).toBe(true)     // evenly spaced — it happened
+
+    // Cut in an earlier round on an era-scoped view, restored once the check
+    // ran across every era. Each of these shapes has been drawn.
+    for (const k of ['oneDecade', 'mult5', 'tightSpan']) expect(CUT_FAMILIES.has(k)).toBe(false)
+    expect(kept.find((f) => f.key === 'oneDecade')!.test([2, 5, 6, 9, 10])).toBe(true)
+    expect(kept.find((f) => f.key === 'mult5')!.test([5, 15, 25, 30, 40])).toBe(true)
+    expect(kept.find((f) => f.key === 'tightSpan')!.test([44, 45, 47, 50, 51])).toBe(true)
     // One slip column is measured but never cut: 9,295 tickets, about one due
     // per era. Asserted on the family itself, since the shape bands reject this
     // particular combination for an unrelated reason.
     expect(kept.find((f) => f.key === 'slipColumn')!.test([2, 5, 9, 12, 14])).toBe(true)
     expect(CUT_FAMILIES.has('slipColumn')).toBe(false)
+  })
+
+  it('never cuts a shape the machine has actually drawn', () => {
+    // Every one of these is a real Powerball result. Scoping the never-seen
+    // check to the current era hid the first six of them and four families were
+    // cut that should not have been, so the check now runs the whole record.
+    const drawn: [string, number[]][] = [
+      ['1995-12-06', [1, 2, 3, 26, 27]],      // three touching pairs
+      ['2003-06-18', [19, 20, 21, 45, 46]],   // three touching pairs
+      ['2019-02-20', [27, 49, 50, 51, 52]],   // four in a row plus a stray, this era
+      ['2015-09-09', [44, 45, 47, 50, 51]],   // five inside an eight-number span
+      ['2003-02-22', [2, 5, 6, 9, 10]],       // all five in one decade
+      ['2009-10-14', [5, 15, 25, 30, 40]],    // all five multiples of five
+      ['2026-04-29', [3, 19, 35, 51, 67]],    // even progression, mirror, one column of eight
+      ['2016-12-28', [16, 23, 30, 44, 58]],   // one column of a seven-wide grid
+      ['2002-06-19', [1, 3, 4, 7, 11]],       // each number the sum of the two before
+      ['1996-12-18', [3, 21, 28, 36, 45]],    // all five triangular
+    ]
+    const cut = structuralFamilies(K, D).filter((f) => CUT_FAMILIES.has(f.key))
+    for (const [date, combo] of drawn) {
+      const hit = cut.filter((f) => f.test(combo)).map((f) => f.key)
+      expect({ date, cutBy: hit }).toEqual({ date, cutBy: [] })
+    }
+  })
+
+  it('prices the narrow-set families from the same groups the ledger deducts', () => {
+    // The failure this guards against is silent: a family priced from one
+    // definition and deducted from another looks right on both sides.
+    const fams = structuralFamilies(K, D)
+    for (const { key, groups } of narrowGroups(K)) {
+      const fam = fams.find((f) => f.key === key)!
+      const union = new Set<string>()
+      for (const g of groups) {
+        for (const combo of subsets(g, D)) {
+          expect(fam.test(combo)).toBe(true)      // every enumerated member is in the family
+          union.add(combo.join('-'))
+        }
+      }
+      expect(union.size).toBe(fam.combos)         // and the family holds nothing else
+      expect(CUT_FAMILIES.has(key)).toBe(true)
+    }
+  })
+
+  it('cuts the narrow-set families and keeps the grid widths that came up', () => {
+    const fams = structuralFamilies(K, D)
+    const test = (k: string) => fams.find((f) => f.key === k)!.test
+    expect(test('sameMultiple')([6, 12, 30, 48, 66])).toBe(true)     // all multiples of six
+    expect(test('sameMultiple')([7, 14, 28, 49, 63])).toBe(true)     // all multiples of seven
+    expect(test('sameMultiple')([4, 8, 12, 16, 20])).toBe(false)     // fours have come up, 94 times
+    expect(test('gridColumn')([2, 11, 20, 47, 65])).toBe(true)       // one column, nine wide
+    expect(test('gridColumn')([16, 23, 30, 44, 58])).toBe(false)     // seven wide — drawn 2016-12-28
+    expect(test('gridColumn')([3, 19, 35, 51, 67])).toBe(false)      // eight wide — drawn 2026-04-29
+    expect(test('twoDigits')([1, 11, 12, 21, 22])).toBe(true)
+    expect(test('powerTwo')([1, 2, 4, 8, 16])).toBe(true)
+    expect(test('repdigit')([11, 22, 33, 44, 55])).toBe(true)
+
+    const draws = fairDraws(900, 4711)
+    const lab = analyzeConstraints(draws, K, D)!
+    const accept = reducedPoolAcceptor(lab, lab.modes.find((m) => m.key === 'balanced')!, new Set())
+    for (const { groups } of narrowGroups(K)) {
+      for (const g of groups) for (const combo of subsets(g, D)) expect(accept(combo)).toBe(false)
+    }
   })
 
   it('cuts every even progression up to step 11 and keeps the wider ones', () => {
