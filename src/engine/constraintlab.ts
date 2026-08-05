@@ -738,6 +738,15 @@ export function structuralFamilies(K: number, D: number): {
     {
       // A Powerball slip is five columns of fourteen, so one slip row is a
       // horizontal line across the ticket — the smallest family in the game.
+      // Wider than the touching-pairs family and not implied by it: 14-16-18-20-21
+      // has one adjacent pair yet is every bit as clustered as 14-15-16-17-18.
+      key: 'tightSpan',
+      label: 'All five inside an eight-number span',
+      combos: windowCount(K, D, 8),
+      test: (s) => s[D - 1] - s[0] <= 7,
+      note: 'Every tight cluster, adjacent or not — 2,191 tickets, of which 1,370 no other rule here reaches.',
+    },
+    {
       key: 'slipRow',
       label: 'A straight line across the play slip',
       combos: (() => {
@@ -819,7 +828,7 @@ export function structuralFamilies(K: number, D: number): {
 }
 
 /** The families safe enough to leave out of the pool: tiny, and never observed. */
-export const CUT_FAMILIES = new Set(['oneDecade', 'mult5', 'sameDigit', 'slipRow', 'squareCube', 'fib', 'digitSum'])
+export const CUT_FAMILIES = new Set(['oneDecade', 'mult5', 'sameDigit', 'slipRow', 'squareCube', 'fib', 'digitSum', 'tightSpan'])
 
 /**
  * Combinations with at least `minPairs` adjacent pairs (values differing by 1).
@@ -1690,6 +1699,7 @@ export function reductionLedger(
     for (let g = 0; g <= 9; g++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 10 === g))
     groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => n % 5 === 0))
     for (let r = 0; r < 14; r++) groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => (n - 1) % 14 === r))
+    for (let m = 1; m + 7 <= K; m++) groups.push(Array.from({ length: 8 }, (_, i) => m + i))
     groups.push(Array.from({ length: K }, (_, i) => i + 1).filter((n) => Number.isInteger(Math.sqrt(n)) || Number.isInteger(Math.cbrt(n))))
     groups.push([1, 2, 3, 5, 8, 13, 21, 34, 55].filter((n) => n <= K))
     const digitSum = (n: number) => String(n).split('').reduce((a, c) => a + Number(c), 0)
