@@ -1290,12 +1290,69 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   background: color-mix(in srgb, var(--ink) 3%, transparent);
 }
 .play-ticket .balls { display: flex; gap: 6px; flex-wrap: wrap; flex: 1 1 auto; }
+/* Also the keep toggle — see the note in PlayView. Sized past the badge it
+   used to be so it is a real touch target without stealing width from the
+   balls: 30px wide, but padded out to 44px of tappable height by the row. */
 .play-idx {
-  flex: 0 0 auto; width: 24px; height: 24px; border-radius: 50%;
-  display: grid; place-items: center;
-  font-size: 12.5px; font-weight: 700; color: var(--muted);
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%; padding: 0;
+  display: grid; place-items: center; cursor: pointer;
+  font-size: 12.5px; font-weight: 700; color: var(--ink-2);
   border: 1px solid var(--border);
+  /* Filled, not outlined: as a plain bordered numeral it read as a label, and
+     nothing about it suggested you could press it. */
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+  position: relative;
 }
+.play-idx:active { background: color-mix(in srgb, var(--gold) 22%, transparent); }
+/* 30px of ink, 44px of target — 30 + 2x7 on both axes, exactly the minimum.
+   Growing the button itself would push the sixth ball off a 375px screen;
+   growing only the hit area costs no layout at all. */
+.play-idx::after { content: ''; position: absolute; inset: -7px; }
+.play-idx.on {
+  color: var(--gold); border-color: color-mix(in srgb, var(--gold) 55%, transparent);
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+  font-size: 14px;
+}
+.play-ticket.locked {
+  border-color: color-mix(in srgb, var(--gold) 42%, var(--border));
+  background: color-mix(in srgb, var(--gold) 7%, transparent);
+}
+
+/* "You're in for this draw" — collapsed to one line until asked to open. */
+.play-held { border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+.play-held-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 11px 13px; min-height: 44px;
+  border: 0; background: color-mix(in srgb, var(--gold) 10%, transparent);
+  color: var(--ink); font-size: 13.5px; font-weight: 640; text-align: left; cursor: pointer;
+}
+.play-held-tick { color: var(--gold); font-weight: 800; }
+.play-held-chev { margin-left: auto; color: var(--muted); }
+.play-held-list { display: grid; gap: 7px; padding: 10px 13px 12px; }
+.play-held-row { display: flex; gap: 5px; flex-wrap: nowrap; }
+
+/* Split risk: a note about what a win pays, never about whether it happens. */
+.crowd-note {
+  border: 1px solid color-mix(in srgb, var(--gold) 34%, var(--border));
+  background: color-mix(in srgb, var(--gold) 7%, transparent);
+  border-radius: 12px; padding: 11px 13px;
+}
+.crowd-line { margin: 0 0 6px; font-size: 13px; line-height: 1.5; color: var(--ink-2); }
+.crowd-tag {
+  display: inline-block; margin-right: 6px; padding: 1px 7px; border-radius: 999px;
+  background: color-mix(in srgb, var(--gold) 20%, transparent);
+  color: var(--gold); font-size: 11.5px; font-weight: 700; white-space: nowrap;
+}
+
+/* The one measured claim on the screen, so it reads as a figure, not chrome. */
+.play-stat {
+  margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink-2);
+  padding: 10px 12px; border-radius: 12px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--ink) 3%, transparent);
+}
+.play-stat b { color: var(--ink); font-weight: 700; }
 /* 44px square: the save star is the smallest thing on the busiest screen, and
    40px tall put it under the minimum comfortable touch target. */
 .play-ticket .btn { flex: 0 0 auto; min-width: 44px; min-height: 44px; }

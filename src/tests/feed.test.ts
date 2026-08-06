@@ -14,7 +14,9 @@ import {
   type JackpotFeed,
 } from '../engine/feed.ts'
 import { buildLedger, gradeTicket } from '../engine/ticket.ts'
-import { buildPortfolio, lowerTierValue, scorePortfolio } from '../engine/portfolio.ts'
+import { buildPortfolio, exactPortfolioStats, lowerTierValue, scorePortfolio } from '../engine/portfolio.ts'
+import { calendarRate, crowdMarkers, uncrowded } from '../engine/crowd.ts'
+import { choose, matchOdds } from '../engine/odds.ts'
 import { flipUnits } from '../components/FlipClock.tsx'
 import { resolveNextDraw } from '../components/NextDraw.tsx'
 import { decodeHistory, encodeHistory, historyUrl } from '../engine/history.ts'
@@ -316,6 +318,169 @@ describe('portfolio coverage', () => {
     const stats = scorePortfolio([{ numbers: [1, 2, 3, 4, 5] }], 69, 5, 0, 200000, 42)
     expect(stats.pAtLeast3).toBeGreaterThan(0.0012)
     expect(stats.pAtLeast3).toBeLessThan(0.0026)
+  })
+
+  it('keeps locked tickets through a re-deal and still spreads around them', () => {
+    const first = buildPortfolio(opts).tickets
+    const hold = [first[0], first[2]]
+    const again = buildPortfolio({ ...opts, seed: 4242, hold }).tickets
+    expect(again).toHaveLength(5)
+    // The held ones come back untouched, numbers and bonus ball alike
+    expect(again[0]).toEqual(hold[0])
+    expect(again[1]).toEqual(hold[1])
+    // and the fresh three are genuinely fresh
+    const heldKeys = new Set(hold.map((t) => t.numbers.join('-')))
+    for (const t of again.slice(2)) expect(heldKeys.has(t.numbers.join('-'))).toBe(false)
+    // A repeated bonus ball is the most expensive overlap there is, so the
+    // dealer must not hand a fresh ticket one a held ticket already carries.
+    expect(new Set(again.map((t) => t.special!)).size).toBe(5)
+    // At full spread, holding two tickets must not cost any coverage
+    expect(new Set(again.flatMap((t) => t.numbers)).size).toBe(25)
+  })
+
+  it('holding nothing deals exactly what it dealt before', () => {
+    expect(buildPortfolio({ ...opts, hold: [] }).tickets).toEqual(buildPortfolio(opts).tickets)
+  })
+})
+
+describe('counting a portfolio exactly', () => {
+  const five = [
+    { numbers: [3, 19, 35, 51, 67], special: 4 },
+    { numbers: [7, 12, 28, 44, 60], special: 11 },
+    { numbers: [2, 21, 33, 48, 55], special: 19 },
+    { numbers: [9, 16, 40, 57, 63], special: 23 },
+    { numbers: [5, 26, 31, 46, 69], special: 8 },
+  ]
+
+  it('reproduces the closed form for one ticket to the last digit', () => {
+    const s = exactPortfolioStats([{ numbers: [1, 2, 3, 4, 5], special: 1 }], 69, 5, 26)!
+    const p3 = 1 / matchOdds(69, 5, 3) + 1 / matchOdds(69, 5, 4) + 1 / matchOdds(69, 5, 5)
+    expect(s.exact).toBe(true)
+    expect(s.pAtLeast3).toBeCloseTo(p3, 12)
+    // A prize means 3+ mains OR the bonus ball, and the two pools are independent
+    expect(s.pAnyPrize).toBeCloseTo(1 - (25 / 26) * (1 - p3), 12)
+  })
+
+  it('agrees with a large simulation of the same five tickets', () => {
+    const exact = exactPortfolioStats(five, 69, 5, 26)!
+    let a = 987654321
+    const rnd = () => { a = (a * 1664525 + 1013904223) >>> 0; return a / 4294967296 }
+    const pool = Array.from({ length: 69 }, (_, i) => i + 1)
+    let any = 0, ge3 = 0, bestSum = 0
+    const N = 2_000_000
+    for (let t = 0; t < N; t++) {
+      for (let i = 0; i < 5; i++) { const j = i + Math.floor(rnd() * (69 - i)); const x = pool[i]; pool[i] = pool[j]; pool[j] = x }
+      const drawn = new Set(pool.slice(0, 5))
+      const sp = 1 + Math.floor(rnd() * 26)
+      let best = 0, paid = false
+      for (const tk of five) {
+        let m = 0
+        for (const n of tk.numbers) if (drawn.has(n)) m++
+        if (m > best) best = m
+        if (m >= 3 || tk.special === sp) paid = true
+      }
+      if (paid) any++
+      if (best >= 3) ge3++
+      bestSum += best
+    }
+    expect(exact.pAnyPrize).toBeCloseTo(any / N, 3)
+    expect(exact.pAtLeast3).toBeCloseTo(ge3 / N, 4)
+    expect(exact.avgBestMatch).toBeCloseTo(bestSum / N, 3)
+  })
+
+  it('accounts for every possible draw exactly once', () => {
+    /*
+     * The whole method rests on collapsing C(K,D) draws onto the subsets of the
+     * covered numbers, each weighted by C(K−covered, D−j). If those weights did
+     * not add back up to the full space, every probability here would be wrong
+     * by the same silent factor — so check the identity directly on a small
+     * game where the total is easy to state.
+     */
+    const K = 20, Dn = 5
+    const tickets = [{ numbers: [1, 2, 3, 4, 5] }, { numbers: [4, 5, 6, 7, 8] }]
+    const cover = new Set(tickets.flatMap((t) => t.numbers))
+    let total = 0
+    for (let j = 0; j <= Dn; j++) total += choose(cover.size, j) * choose(K - cover.size, Dn - j)
+    expect(total).toBe(choose(K, Dn))
+    const s = exactPortfolioStats(tickets, K, Dn, 0)!
+    expect(s.distinctNumbers).toBe(8)
+    // With no bonus pool, "any prize" is exactly "some ticket hits 3+"
+    expect(s.pAnyPrize).toBeCloseTo(s.pAtLeast3, 12)
+  })
+
+  it('five different tickets get five shots at 4+, five copies of one get a single shot', () => {
+    const same = Array.from({ length: 5 }, () => ({ numbers: [3, 19, 35, 51, 67], special: 5 }))
+    const a = exactPortfolioStats(same, 69, 5, 26)!
+    const b = exactPortfolioStats(five, 69, 5, 26)!
+    expect(b.pAtLeast4).toBeCloseTo(a.pAtLeast4 * 5, 9)
+    // and the bonus ball is why spreading wins on "any prize" at all
+    expect(b.pAnyPrize).toBeGreaterThan(a.pAnyPrize * 4)
+  })
+
+  it('scorePortfolio counts the sets the app actually offers, and says so', () => {
+    const s = scorePortfolio(five, 69, 5, 26, 20000, 7)
+    expect(s.exact).toBe(true)
+    // Ten tickets on a 6-number game cover too much to enumerate; it falls back
+    // to simulation rather than hanging, and reports that it did.
+    const wide = Array.from({ length: 10 }, (_, i) => ({ numbers: [1, 2, 3, 4, 5, 6].map((n) => n + i * 6) }))
+    expect(scorePortfolio(wide, 70, 6, 0, 2000, 7).exact).toBe(false)
+  })
+
+  it('the figures no longer move when only the seed does', () => {
+    // Two simulations of the same tickets used to disagree in the third digit,
+    // which is the same size as the difference between the rows being compared.
+    const a = scorePortfolio(five, 69, 5, 26, 20000, 1)
+    const b = scorePortfolio(five, 69, 5, 26, 20000, 999)
+    expect(a).toEqual(b)
+  })
+})
+
+describe('combinations other people also play', () => {
+  it('names why a ticket would be shared, and stays quiet otherwise', () => {
+    // 3-19-35-51-67 is NOT the neutral example it looks like: it steps by 16.
+    expect(crowdMarkers([3, 19, 35, 51, 67], 69).map((m) => m.key)).toEqual(['evenStep'])
+    expect(crowdMarkers([4, 17, 33, 48, 62], 69).map((m) => m.key)).toEqual([])
+    expect(crowdMarkers([4, 11, 17, 23, 31], 69).map((m) => m.key)).toEqual(['calendar'])
+    expect(crowdMarkers([2, 5, 7, 9, 12], 69).map((m) => m.key)).toEqual(['months'])
+    expect(crowdMarkers([11, 12, 13, 14, 15], 69).map((m) => m.key)).toContain('run')
+    expect(crowdMarkers([4, 16, 28, 40, 52], 69).map((m) => m.key)).toContain('evenStep')
+    expect(crowdMarkers([10, 25, 35, 50, 60], 69).map((m) => m.key)).toContain('fives')
+    expect(crowdMarkers([4, 14, 24, 44, 64], 69).map((m) => m.key)).toContain('sameDigit')
+  })
+
+  it('flags a combination that already won, because that is the story people replay', () => {
+    const past = new Set(['4-17-33-48-62'])
+    expect(crowdMarkers([4, 17, 33, 48, 62], 69, past).map((m) => m.key)).toEqual(['pastWinner'])
+  })
+
+  it('never says a crowded combination is unlikely, because it is not', () => {
+    /*
+     * The whole feature has to survive this: the calendar range comes up at its
+     * proper rate and always will. The claim is about the size of the cheque,
+     * never about the chance of getting one.
+     */
+    const rate = calendarRate(69, 5, [])
+    expect(rate.expected).toBeCloseTo(choose(31, 5) / choose(69, 5), 12)
+    expect(rate.expected).toBeGreaterThan(0.015)
+    const seen = calendarRate(69, 5, [[4, 11, 17, 23, 31], [3, 19, 35, 51, 67]])
+    expect(seen.seen).toBe(1)
+    expect(seen.of).toBe(2)
+  })
+
+  it('the dealer will not hand you one', () => {
+    const scores = new Float64Array(70)
+    // Stack the model heavily toward 1..31 so the ONLY thing keeping the deal
+    // out of the calendar range is the crowd test itself.
+    for (let i = 1; i <= 69; i++) scores[i] = i <= 31 ? 1 : 1e-6
+    const free = uncrowded(69)
+    const pf = buildPortfolio({
+      scores, K: 69, D: 5, specialK: 26, specialPicks: [], count: 5, spread: 0.65,
+      accept: free, trials: 1,
+    })
+    for (const t of pf.tickets) {
+      expect(crowdMarkers(t.numbers, 69)).toEqual([])
+      expect(Math.max(...t.numbers)).toBeGreaterThan(31)
+    }
   })
 })
 

@@ -647,6 +647,7 @@ export default function App() {
                 draws={draws}
                 drawTime={settings.drawTime}
                 feed={feed}
+                savedTickets={activeGame?.savedTickets ?? EMPTY_TICKETS}
                 onSetJackpot={setNextJackpot}
                 onSaveTicket={saveTicket}
                 onOpenLab={() => goLab()}

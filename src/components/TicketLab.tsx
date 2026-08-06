@@ -5,6 +5,7 @@ import { formatDate } from '../engine/dates.ts'
 import { formatOdds, jackpotOdds } from '../engine/odds.ts'
 import { positionalFit, type PositionalFit } from '../engine/positions.ts'
 import { buildLedger, type Ledger } from '../engine/ticket.ts'
+import { crowdMarkers, type CrowdMarker } from '../engine/crowd.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
 
 const dollars = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(n).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
@@ -82,6 +83,7 @@ interface Evaluation {
   ge3Count: number
   specialCount: number | null
   posFit: PositionalFit | null
+  crowd: CrowdMarker[]
 }
 
 /** Score any ticket against the model and the full history. */
@@ -102,6 +104,7 @@ export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTick
 
   const rankOf = useMemo(() => new Map(res.predictions.map((p) => [p.number, p])), [res.predictions])
   const ledger = useMemo(() => buildLedger(savedTickets, draws, D), [savedTickets, draws, D])
+  const pastKeys = useMemo(() => new Set(draws.map((d) => d.sorted.join('-'))), [draws])
 
   const parseInputs = (): SavedTicket | null => {
     const parsed = nums.map((s) => Number(s.trim()))
@@ -195,6 +198,7 @@ export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTick
       ge3Count: ge3,
       specialCount: sp !== null ? specialCount : null,
       posFit: res.positionAnalysis ? positionalFit(res.positionAnalysis, parsed) : null,
+      crowd: crowdMarkers(parsed, res.K, pastKeys),
     })
   }
 
@@ -316,6 +320,22 @@ export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTick
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+          {evalResult.crowd.length > 0 && (
+            <div className="crowd-note">
+              <div className="mini-title">Others are likely playing this too</div>
+              {evalResult.crowd.map((m) => (
+                <p className="crowd-line" key={m.key}>
+                  <span className="crowd-tag">{m.label}</span> {m.note}
+                </p>
+              ))}
+              <p className="hint" style={{ display: 'block', marginTop: 6 }}>
+                None of this changes the odds — a combination like this comes up exactly as often as any other, and
+                this game's own history contains plenty of them. It changes what winning <em>pays</em>: a jackpot is
+                divided between everyone holding it. The five games on the Play screen skip these shapes for that
+                reason alone, and it costs nothing to skip them, because every combination is equally likely.
+              </p>
             </div>
           )}
           <p className="hint">
