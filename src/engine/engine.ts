@@ -10,7 +10,7 @@ import { analyzeConstraints, poolWalkForward, reducedPoolAcceptor } from './cons
 import { detectEra } from './era.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
-  topFollowers, topPairs, trends, weekdaySignificance, windowCounts,
+  topFollowers, topPairs, trends, weekdaySignificance,
 } from './analytics.ts'
 import { addDays, dowOf } from './dates.ts'
 
@@ -290,7 +290,9 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
     positions: positionProfiles(state),
     similar,
     frequency,
-    windowFrequency: windowCounts(draws, K, settings.exploreWindow),
+    // The window explorer is a UI knob, computed in the panel: at 0.02ms it
+    // does not belong behind a 1.6-second backtest.
+    windowFrequency: [],
     backtest: bt.summary,
     computeMs: Math.round(performance.now() - started),
   }

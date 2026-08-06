@@ -17,6 +17,21 @@ export function useLocalStorage<T>(key: string, initial: T): [T, (v: T | ((prev:
     } catch { /* storage full/unavailable — keep working in memory */ }
   }, [value])
 
+  /*
+   * Adopt writes from other tabs. Every game, draw and saved ticket lives under
+   * one key, and the effect above writes the whole snapshot — so without this,
+   * a second tab holding an older copy would overwrite a sync done in the first
+   * one the moment anything at all changed there, even just switching game tab.
+   */
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== keyRef.current || e.newValue === null) return
+      try { setValue(JSON.parse(e.newValue) as T) } catch { /* ignore a bad write */ }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
   const set = useCallback((v: T | ((prev: T) => T)) => setValue(v), [])
   return [value, set]
 }

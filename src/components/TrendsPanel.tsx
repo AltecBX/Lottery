@@ -1,14 +1,23 @@
-import type { EngineResult, Settings } from '../engine/types.ts'
+import { useMemo } from 'react'
+import type { Draw, EngineResult, Settings } from '../engine/types.ts'
+import { windowCounts } from '../engine/analytics.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
 import { BarChart } from './charts/BarChart.tsx'
 
-export function TrendsPanel({ res, settings, onWindowChange }: {
+export function TrendsPanel({ res, draws, settings, onWindowChange }: {
   res: EngineResult
+  draws: Draw[]
   settings: Settings
   onWindowChange: (w: number) => void
 }) {
   const windows = [10, 20, 50, 100, 250]
   const top10 = new Set(res.top10.map((p) => p.number))
+  // Counted here rather than in the engine: it takes 0.02ms, and asking the
+  // engine for it made every window button re-run the whole backtest.
+  const windowFrequency = useMemo(
+    () => (res.K > 0 ? windowCounts(draws, res.K, settings.exploreWindow) : []),
+    [draws, res.K, settings.exploreWindow],
+  )
   return (
     <SectionCard
       collapsible
@@ -72,7 +81,7 @@ export function TrendsPanel({ res, settings, onWindowChange }: {
         Appearances {settings.exploreWindow >= 250 ? 'across all history' : `in the last ${settings.exploreWindow} draws`}
       </div>
       <BarChart
-        data={(settings.exploreWindow >= 250 ? res.frequency : res.windowFrequency).map((f) => ({
+        data={(settings.exploreWindow >= 250 ? res.frequency : windowFrequency).map((f) => ({
           label: String(f.number),
           value: f.count,
           highlight: top10.has(f.number),
@@ -87,7 +96,7 @@ export function TrendsPanel({ res, settings, onWindowChange }: {
           <table className="tbl">
             <thead><tr><th>Number</th><th className="num">Count</th></tr></thead>
             <tbody>
-              {(settings.exploreWindow >= 250 ? res.frequency : res.windowFrequency).map((f) => (
+              {(settings.exploreWindow >= 250 ? res.frequency : windowFrequency).map((f) => (
                 <tr key={f.number}><td>{f.number}</td><td className="num">{f.count}</td></tr>
               ))}
             </tbody>

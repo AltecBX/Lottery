@@ -33,10 +33,17 @@ export function parseSocrataRows(rows: SocrataRow[], key: SyncKey): ParseOutcome
   const draws: Draw[] = []
   const errors: string[] = []
   const seen = new Set<string>()
+  /*
+   * Everything below is defensive on purpose. `??` does not coerce, so a
+   * numeric `draw_date` or an array `winning_numbers` used to throw straight
+   * out of the loop and take the entire sync with it — five thousand good rows
+   * discarded because one was odd. A bad row is skipped; the rest still land.
+   */
+  if (!Array.isArray(rows)) return { draws: [], errors: ['The official source returned an unexpected payload.'], warnings: [], drawSize: 0, hasSpecial: false }
   for (const row of rows) {
-    const dateRaw = (row.draw_date ?? '').slice(0, 10)
+    const dateRaw = String(row?.draw_date ?? '').slice(0, 10)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) continue
-    const parts = (row.winning_numbers ?? '').trim().split(/\s+/).map(Number)
+    const parts = String(row?.winning_numbers ?? '').trim().split(/\s+/).map(Number)
     let mains: number[]
     let special: number | undefined
     if (key === 'powerball') {
@@ -147,8 +154,9 @@ interface SalesRow { bus_day?: string; total?: string }
 /** Map raw aggregated sales rows to a date → dollars lookup. Pure, for tests. */
 export function parseSalesRows(rows: SalesRow[]): Map<string, number> {
   const out = new Map<string, number>()
+  if (!Array.isArray(rows)) return out
   for (const r of rows) {
-    const date = (r.bus_day ?? '').slice(0, 10)
+    const date = String(r?.bus_day ?? '').slice(0, 10)
     const amount = Number(r.total)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(amount) || amount <= 0) continue
     out.set(date, amount)

@@ -23,9 +23,11 @@ export function splitDelimited(text: string): Cell[][] {
   let delim: string = ','
   let best = 0
   for (const c of candidates) {
-    const counts = firstLines.map((l) => l.split(c).length - 1)
-    const min = Math.min(...counts)
-    if (min > best) { best = min; delim = c }
+    // Median, not minimum: one delimiter-free line — a title above the header,
+    // a trailing note — dropped every candidate to zero and left the default.
+    const counts = firstLines.map((l) => l.split(c).length - 1).sort((x, y) => x - y)
+    const mid = counts.length ? counts[Math.floor(counts.length / 2)] : 0
+    if (mid > best) { best = mid; delim = c }
   }
 
   const rows: Cell[][] = []
@@ -43,14 +45,21 @@ export function splitDelimited(text: string): Cell[][] {
       if (ch === '"') {
         if (text[i + 1] === '"') { field += '"'; i++ } else inQuotes = false
       } else field += ch
-    } else if (ch === '"') {
+    } else if (ch === '"' && field === '') {
+      // RFC 4180: a quote only opens a field at its start. Treating one
+      // anywhere as an opener meant a single apostrophe-as-inch-mark in a free
+      // text column — "Smith\"s Grocery" in the Louisiana winner-location
+      // feed — swallowed the entire rest of the file into one field, with no
+      // error: 3,537 draws became 10.
       inQuotes = true
     } else if (ch === delim) {
       pushField()
     } else if (ch === '\n') {
       pushField(); pushRow()
     } else if (ch === '\r') {
-      // swallow; \n handles the row break
+      // Classic Mac line endings: a lone \r is a row break. Swallowing it
+      // unconditionally fused every line into its neighbour.
+      if (text[i + 1] !== '\n') { pushField(); pushRow() }
     } else {
       field += ch
     }
@@ -78,7 +87,10 @@ function isHeaderRow(cells: Cell[]): boolean {
 
 function asInt(c: Cell): number | null {
   if (typeof c === 'number') return Number.isInteger(c) ? c : null
-  const s = c.trim()
+  // Blanking a column past a short row's length leaves an array hole, and
+  // `for...of` yields undefined for it — which used to throw and discard the
+  // whole import over one ragged line.
+  const s = String(c ?? '').trim()
   if (!/^\d{1,3}$/.test(s)) return null
   return Number(s)
 }
@@ -143,7 +155,19 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto
   let jackpotIdx = -1
   let locationIdx = -1
   const ignoreIdx = new Set<number>()
-  if (isHeaderRow(rows[0])) {
+  /*
+   * The header is not always the first line: exports often carry a title or a
+   * blank note above it. Taking row 0 regardless made the real header parse as
+   * data, which filed the Powerball and the Power Play multiplier as main
+   * numbers and silently turned a 5-number game into a 7-number one.
+   */
+  let headerAt = -1
+  for (let i = 0; i < Math.min(3, rows.length); i++) if (isHeaderRow(rows[i])) { headerAt = i; break }
+  if (headerAt > 0) {
+    warnings.push(`Ignored ${headerAt} line${headerAt === 1 ? '' : 's'} above the header row.`)
+    rows = rows.slice(headerAt)
+  }
+  if (headerAt >= 0) {
     const header = rows[0]
     for (let i = 0; i < header.length; i++) {
       const cell = String(header[i]).trim()
@@ -229,12 +253,27 @@ export function rowsToDraws(rowsIn: Cell[][], expectedSize = 0, bonusMode: 'auto
       rest = rest.slice(1)
     }
     const numerics: number[] = []
-    for (const c of rest) {
-      if (String(c).trim() === '') continue
+    for (let ci = 0; ci < rest.length; ci++) {
+      const c = rest[ci]
+      if (String(c ?? '').trim() === '') continue
       const n = asInt(c)
       if (n === null) {
         if (numerics.length === 0) {
           errors.push(`Row ${line}: "${String(c)}" is not a whole number.`)
+          return
+        }
+        /*
+         * Only genuinely trailing text is ignorable. A non-numeric cell with
+         * more numbers after it is a corrupt row — 10,20*,30,40,50,60 used to
+         * parse silently as 10-30-40-50-60, dropping the starred ball and
+         * promoting the bonus into the mains with no error at all.
+         */
+        let numbersFollow = false
+        for (let cj = ci + 1; cj < rest.length; cj++) {
+          if (String(rest[cj] ?? '').trim() !== '' && asInt(rest[cj]) !== null) { numbersFollow = true; break }
+        }
+        if (numbersFollow) {
+          errors.push(`Row ${line}: "${String(c)}" sits between numbers but is not one.`)
           return
         }
         continue // trailing text columns are ignored

@@ -63,6 +63,10 @@ export function analyzeJackpots(draws: Draw[]): JackpotStats {
     if (draws[i].winnerLocation) break
     rolloverRun++
   }
+  // No winner column at all is not a record-breaking rollover. Without this the
+  // panel read "0 winners · 3,537 draws since the last one" for any history
+  // that simply never carried the column.
+  if (winners.length === 0) rolloverRun = 0
 
   // Sales vs jackpot correlation
   let salesVsJackpot: JackpotStats['salesVsJackpot'] = null
@@ -198,7 +202,18 @@ export function projectNextJackpot(draws: Draw[]): JackpotProjection | null {
     if (diff > 0) steps.push(diff)
   }
   if (steps.length === 0) return null
-  return { amount: last.jackpot! + median(steps.slice(-30)), basis: 'rollover', samples: steps.length }
+  /*
+   * One median step is only right when the last recorded amount belongs to the
+   * most recent draw. When the newest draws carry no figure — the normal state
+   * between a sync and the next feed update — the projection has to cover every
+   * draw since. Adding a single step regardless read 40% low after ten draws.
+   */
+  let gap = 1
+  for (let i = draws.length - 1; i >= 0; i--) {
+    if (draws[i] === last) break
+    gap++
+  }
+  return { amount: last.jackpot! + gap * median(steps.slice(-30)), basis: 'rollover', samples: steps.length }
 }
 
 /** Published Powerball / Mega Millions style fixed lower tiers (US $2 games). */
