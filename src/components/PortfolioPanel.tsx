@@ -3,13 +3,15 @@ import type { Draw, EngineResult } from '../engine/types.ts'
 import type { SavedTicket } from '../engine/games.ts'
 import { buildPortfolio, lowerTierValue, type PortfolioStats } from '../engine/portfolio.ts'
 import { reducedPoolAcceptor } from '../engine/constraintlab.ts'
+import { uncrowded } from '../engine/crowd.ts'
 import { formatOdds, jackpotOdds } from '../engine/odds.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
 
 /**
  * Rare events read better as odds than as a percentage — "1 in 1,800" says
- * something "0.1%" does not. Two significant figures keeps the simulation's own
- * noise from showing up as false precision.
+ * something "0.1%" does not. Rounded to two significant figures because that is
+ * the resolution the reader can use; the underlying figure is now counted
+ * exactly, so every digit printed is a true one.
  */
 const money = (n: number) => `$${n.toFixed(2)}`
 
@@ -67,10 +69,13 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
   // no record-edge total — so the two features never disagree.
   const accept = useMemo(() => {
     const lab = res.constraintLab
-    if (!lab) return null
+    const crowdFree = uncrowded(res.K, pastWinners)
+    if (!lab) return crowdFree
     const balanced = lab.modes.find((m) => m.key === 'balanced') ?? lab.modes[0]
-    return balanced ? reducedPoolAcceptor(lab, balanced, pastWinners) : null
-  }, [res.constraintLab, pastWinners])
+    if (!balanced) return crowdFree
+    const inPool = reducedPoolAcceptor(lab, balanced, pastWinners)
+    return (sorted: number[]) => inPool(sorted) && crowdFree(sorted)
+  }, [res.constraintLab, res.K, pastWinners])
 
   const scores = useMemo(() => {
     const s = new Float64Array(res.K + 1)
@@ -236,12 +241,26 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
         {' '}{count - 1} of your tickets tell you nothing you did not already know.
       </p>
       <p className="hint" style={{ display: 'block', marginTop: 8 }}>
-        Measured over {portfolio.trials.toLocaleString()} simulated draws from a fair, uniform machine, so every figure
-        here holds whether or not the model's ranking is any good — coverage is a property of the tickets themselves.
-        A quick pick is already well spread; the only difference between it and this set is <em>which</em> numbers get
-        covered, which is exactly where the model earns or fails to earn its keep. These tickets also come from the same
-        reduced pool as the model's pick — real-draw shapes, no past jackpot, no record-edge total — which changes no
-        ticket's odds, but combinations with a story attract co-winners, and a shared jackpot pays less.
+        {stats.exact ? (
+          <>
+            <strong>Counted, not simulated.</strong> Only the numbers actually on these tickets can change the outcome,
+            so rather than sampling draws the app walks every distinct case once and weights it by how many real draws
+            land on it — the figures above are exact. That matters at this scale: some ticket hitting 3+ happens about{' '}
+            {oneIn(stats.pAtLeast3)} draws, and a simulation small enough to run on a phone would be reporting mostly
+            its own sampling error — including differences between these three rows that were never really there.
+          </>
+        ) : (
+          <>
+            Measured over {portfolio.trials.toLocaleString()} simulated draws, because this many tickets cover too much
+            of the pool to count case by case — so these figures carry some sampling noise.
+          </>
+        )}{' '}
+        Either way they hold whether or not the model's ranking is any good, because coverage is a property of the
+        tickets themselves. A quick pick is already well spread; the only difference between it and this set is{' '}
+        <em>which</em> numbers get covered, which is exactly where the model earns or fails to earn its keep. These
+        tickets also come from the same reduced pool as the model's pick — real-draw shapes, no past jackpot, no
+        record-edge total, and none of the combinations half the country fills in by hand — which changes no ticket's
+        odds, but a combination with a story attracts co-winners, and a shared jackpot pays less.
       </p>
     </SectionCard>
   )
