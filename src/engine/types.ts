@@ -34,9 +34,14 @@ export interface Settings {
   /** Local draw time as "HH:MM", used for the countdown when the game has no official time. */
   drawTime: string
   /**
-   * Which draws to analyze. 'all' (the default) uses the whole history;
-   * 'current' uses only the game's current rule era. Nothing is ever deleted —
-   * this only chooses what the model sees.
+   * How much history the combination-level views see. 'all' (the default) keeps
+   * every draw; 'current' keeps only the game's current rule era.
+   *
+   * It does NOT change what the prediction model learns from — that is always
+   * scoped to the current era inside the engine, because draws from a retired
+   * pool are not samples from today's machine. What it does change is repeat
+   * watch and the already-drawn exclusions, where an old main set is still a
+   * ticket you can buy. Nothing is ever deleted either way.
    */
   era: 'current' | 'all'
 }

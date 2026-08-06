@@ -266,9 +266,13 @@ export function AddResultDialog({ open, onClose, defaultDate, poolMax, drawSize,
   const [location, setLocation] = useState('')
   const [error, setError] = useState('')
 
+  // Only on open. `defaultDate` tracks the next draw date, so a background
+  // sync landing while the dialog is up used to advance it and wipe whatever
+  // was half-typed.
   useEffect(() => {
     if (open) { setDate(defaultDate); setNums(Array(D).fill('')); setSpecial(''); setError('') }
-  }, [open, defaultDate, D])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open])
 
   const countWord = COUNT_WORDS[D] || String(D)
 
@@ -495,12 +499,13 @@ export function SettingsDialog({ open, onClose, settings, gameName, detectedPool
             {era.currentSpecialMax > 0 && era.earlySpecialMax !== era.currentSpecialMax
               ? `, bonus ball ${era.earlySpecialMax} → ${era.currentSpecialMax}`
               : ''}
-            . Everything is the default, so all {(era.kept + era.excluded).toLocaleString()} draws are analyzed.
-            Worth knowing what that costs: the {era.excluded.toLocaleString()} earlier draws were played under rules
-            that no longer exist, so the detected pool stretches to cover them — which widens the jackpot odds and
-            every expected-value figure built on them, and leaves numbers that only exist under the current rules
-            looking permanently cold. Switching to current rules only fixes that at the price of a shorter history.
-            Nothing is deleted either way; this only chooses what the model reads.
+            . The prediction model always learns from the {era.kept.toLocaleString()} current-rule draws whichever
+            option is chosen — draws from a {era.earlyMax}-ball machine are not samples from a {era.currentMax}-ball
+            one, and training across the change measurably biased it against numbers that did not exist for most of
+            its history. What this switch really controls is the combination-level history: the{' '}
+            {era.excluded.toLocaleString()} older draws still count as jackpots already drawn and still feed
+            repeat-watch, because a main set from {era.earlyMax}-ball days is a ticket you can still buy today.
+            Nothing is ever deleted either way.
           </span>
         </div>
       )}

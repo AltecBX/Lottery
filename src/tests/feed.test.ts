@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { parseSalesRows, parseSocrataRows } from '../engine/sync.ts'
+import { parseDelimitedText, rowsToDraws } from '../engine/parse.ts'
+import { analyzeJackpots, projectNextJackpot } from '../engine/jackpot.ts'
 import powerballPage from './fixtures/powerball-next-drawing.html?raw'
 import megaMillionsPayload from './fixtures/megamillions-latest.json?raw'
 import {
@@ -194,18 +197,56 @@ describe('portfolio coverage', () => {
     for (const t of spread.tickets) expect(new Set(t.numbers).size).toBe(5)
   })
 
-  it('spreads the bonus ball past the model’s short candidate list', () => {
-    // the engine only ranks a handful of bonus candidates; the rest of the pool fills in
+  it('deals five distinct bonus balls that change with the seed', () => {
+    /*
+     * Two failed designs live in this test's history. Indexing the bonus by
+     * ticket position ignored the seed entirely — the same five balls on every
+     * deal. Rotating the ranked order fixed that and put 15-16-17-18-19 on the
+     * user's screen, because everything after the ranked picks is 1..K
+     * ascending and a rotated window of it is consecutive integers. The dealer
+     * now samples without replacement, weighted by the model's own claims.
+     */
     const spread = buildPortfolio(opts)
-    const specials = spread.tickets.map((t) => t.special)
+    const specials = spread.tickets.map((t) => t.special!)
     expect(new Set(specials).size).toBe(5)
-    // Consecutive entries of the ranked order, wherever the seed starts it.
-    const order = [19, 3, 21, ...Array.from({ length: 26 }, (_, i) => i + 1).filter((n) => ![19, 3, 21].includes(n))]
-    const at = order.indexOf(specials[0]!)
-    expect(at).toBeGreaterThanOrEqual(0)
-    expect(specials).toEqual([0, 1, 2, 3, 4].map((i) => order[(at + i) % order.length]))
+    for (const s of specials) { expect(s).toBeGreaterThanOrEqual(1); expect(s).toBeLessThanOrEqual(26) }
+    // not a consecutive run — the tell of the rotation bug
+    const sorted = [...specials].sort((a, b) => a - b)
+    expect(sorted.every((v, i) => i === 0 || v - sorted[i - 1] === 1)).toBe(false)
+    // and the seed genuinely re-deals them
+    const other = buildPortfolio({ ...opts, seed: 99 }).tickets.map((t) => t.special!)
+    expect(other.join(',')).not.toBe(specials.join(','))
     // matching the bonus alone already pays, so spread must not lose to a quick pick here
     expect(spread.stats.pAnyPrize).toBeGreaterThan(spread.concentrated.pAnyPrize)
+  })
+
+  it('does not deal the same top numbers into every ticket of every deal', () => {
+    /*
+     * The user's screenshot: three consecutive deals where number 36 sat in
+     * all fifteen tickets and one ticket was byte-identical every time. The
+     * model's own claim for its top number was 1.30× the bottom one; the old
+     * weight curve stretched that to a fixed 17×, so the sampler dealt the
+     * same "hot" numbers into essentially every candidate. The weights now
+     * equal the claims, so a number can dominate only if the model can prove
+     * that domination.
+     */
+    const flat = new Float64Array(70)
+    for (let i = 1; i <= 69; i++) flat[i] = 0.062 + 0.019 * ((70 - i) / 69) // the live model's real spread
+    const seen = new Map<number, number>()
+    const dealt = new Set<string>()
+    let tickets = 0
+    for (let seed = 1; seed <= 10; seed++) {
+      const r = buildPortfolio({ ...opts, scores: flat, spread: 0.65, seed, trials: 200 })
+      dealt.add(r.tickets.map((t) => t.numbers.join('-')).join('|'))
+      for (const t of r.tickets) {
+        tickets++
+        for (const n of new Set(t.numbers)) seen.set(n, (seen.get(n) ?? 0) + 1)
+      }
+    }
+    expect(dealt.size).toBe(10)
+    const most = Math.max(...seen.values())
+    // With honest 1.3× weights nothing should be anywhere near every ticket.
+    expect(most / tickets).toBeLessThan(0.6)
   })
 
   it('re-deals every ticket when the seed changes, bonus balls included', () => {
@@ -343,5 +384,106 @@ describe('merged draw history', () => {
       .toBe('https://altecbx.github.io/Lottery/history-powerball.json?t=7')
     expect(historyUrl('https://altecbx.github.io/Lottery/index.html', 'megamillions', 7))
       .toBe('https://altecbx.github.io/Lottery/history-megamillions.json?t=7')
+  })
+})
+
+describe('audited robustness fixes', () => {
+  it('does not swallow the file after a quote inside a free-text column', () => {
+    // The Louisiana feed carries a winner-location column. One inch mark in it
+    // used to open quote mode and eat every remaining line, with no error:
+    // 3,537 draws became 10.
+    const text = [
+      'date,n1,n2,n3,n4,n5,pb,location',
+      '2026-01-03,1,2,3,4,5,6,Smith"s Grocery',
+      '2026-01-05,7,8,9,10,11,12,Corner Store',
+      '2026-01-07,13,14,15,16,17,18,Gas N Go',
+    ].join('\n')
+    const { draws } = parseDelimitedText(text)
+    expect(draws).toHaveLength(3)
+    expect(draws[2].sorted).toEqual([13, 14, 15, 16, 17])
+    // real quoting still works
+    const quoted = parseDelimitedText('date,n1,n2,n3,n4,n5\n2026-01-03,1,2,3,4,5\n"2026-01-05",6,7,8,9,10')
+    expect(quoted.draws).toHaveLength(2)
+  })
+
+  it('reports a ragged row instead of throwing away the whole import', () => {
+    const rows = [
+      ['date', 'n1', 'n2', 'n3', 'n4', 'n5', 'jackpot'],
+      ['2026-01-03', '1', '2', '3', '4', '5', '100000000'],
+      ['2026-01-05'],
+      ['2026-01-07', '11', '12', '13', '14', '15', '120000000'],
+    ]
+    const out = rowsToDraws(rows)
+    expect(out.draws.length).toBeGreaterThanOrEqual(2)
+    expect(out.draws.map((d) => d.date)).toContain('2026-01-07')
+  })
+
+  it('rejects a corrupt row rather than silently shifting the bonus into the mains', () => {
+    // 10,20*,30,40,50,60 used to parse as 10-30-40-50-60 with zero errors:
+    // the starred ball vanished and the bonus was promoted.
+    const { draws, errors } = parseDelimitedText('2026-01-05,10,20*,30,40,50,60\n2026-01-07,1,2,3,4,5,6')
+    expect(errors.length).toBeGreaterThan(0)
+    expect(draws.every((d) => !d.sorted.includes(60))).toBe(true)
+  })
+
+  it('treats a lone carriage return as a row break', () => {
+    const { draws, drawSize } = parseDelimitedText('2026-01-03,1,2,3,4,5\r2026-01-05,6,7,8,9,10\r2026-01-07,11,12,13,14,15\r')
+    expect(drawSize).toBe(5)
+    expect(draws).toHaveLength(3)
+    expect(draws[0].sorted).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('finds the header under a title line instead of eating it', () => {
+    const text = [
+      'Powerball Winning Numbers',
+      'date,n1,n2,n3,n4,n5,pb',
+      '2026-01-03,1,2,3,4,5,6',
+      '2026-01-05,7,8,9,10,11,12',
+    ].join('\n')
+    const { draws, drawSize, hasSpecial } = parseDelimitedText(text)
+    expect(drawSize).toBe(5)
+    expect(hasSpecial).toBe(true)
+    expect(draws).toHaveLength(2)
+  })
+
+  it('skips a malformed remote row instead of aborting the sync', () => {
+    const rows = [
+      { draw_date: '2026-08-02T00:00:00.000', winning_numbers: '05 25 36 40 48 03' },
+      { draw_date: 20260804 as unknown as string, winning_numbers: '1 2 3 4 5 6' },
+      { draw_date: '2026-08-05', winning_numbers: 5 as unknown as string },
+      null as unknown as { draw_date: string },
+      { draw_date: '2026-08-08T00:00:00.000', winning_numbers: '10 20 30 40 50 07' },
+    ]
+    const out = parseSocrataRows(rows, 'powerball')
+    expect(out.draws.map((d) => d.date)).toEqual(['2026-08-02', '2026-08-08'])
+    expect(parseSocrataRows({ error: true } as never, 'powerball').draws).toHaveLength(0)
+    expect(parseSalesRows([{ bus_day: 20260802 as unknown as string, total: '5' }]).size).toBe(0)
+  })
+
+  it('projects the jackpot across every draw since the last recorded amount', () => {
+    const mk = (i: number, jackpot?: number): Draw => {
+      const day = String(3 + i * 2).padStart(2, '0')
+      const d: Draw = { date: `2026-01-${day}`, dow: i % 7, numbers: [1, 2, 3, 4, 5], sorted: [1, 2, 3, 4, 5] }
+      if (jackpot !== undefined) d.jackpot = jackpot
+      return d
+    }
+    const withAll = [0, 1, 2, 3, 4, 5].map((i) => mk(i, 100e6 + i * 20e6))
+    const anchored = projectNextJackpot(withAll)!
+    expect(anchored.amount).toBeCloseTo(200e6 + 20e6, -5)
+    // Now the newest three draws carry no figure: the estimate has to cover them
+    const stale = [...withAll, mk(6), mk(7), mk(8)]
+    const projected = projectNextJackpot(stale)!
+    expect(projected.amount).toBeCloseTo(200e6 + 4 * 20e6, -5)
+    expect(projected.amount).toBeGreaterThan(anchored.amount)
+  })
+
+  it('does not claim a record rollover when no winner column exists', () => {
+    const draws: Draw[] = Array.from({ length: 60 }, (_, i) => ({
+      date: `2026-${String(1 + Math.floor(i / 28)).padStart(2, '0')}-${String(1 + (i % 28)).padStart(2, '0')}`,
+      dow: i % 7, numbers: [1, 2, 3, 4, 5], sorted: [1, 2, 3, 4, 5], jackpot: 100e6 + i * 1e6,
+    }))
+    const stats = analyzeJackpots(draws)
+    expect(stats!.winners).toHaveLength(0)
+    expect(stats!.rolloverRun).toBe(0)
   })
 })

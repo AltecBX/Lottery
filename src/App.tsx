@@ -142,7 +142,17 @@ export default function App() {
   const era = useMemo(() => detectEra(allDraws), [allDraws])
   const draws = useMemo(() => drawsForEra(allDraws, settings.era, era), [allDraws, settings.era, era])
 
-  const { result, computing } = useEngine(draws, settings)
+  /*
+   * Only what runEngine actually reads. Passing the whole settings object made
+   * every UI-only knob — draw time, bonus mode, the trends window — trigger a
+   * full walk-forward backtest, ~1.6 seconds on a desktop and several times
+   * that on a phone, with the whole Lab dimmed behind "Recalculating…".
+   */
+  const engineSettings = useMemo(
+    () => ({ ...settings, exploreWindow: 0, drawTime: '', bonus: 'auto' as const, drawSize: 0 }),
+    [settings.poolMax, settings.nextDate, settings.specialMax, settings.era],
+  )
+  const { result, computing, error: engineError } = useEngine(draws, engineSettings)
   // Read inside callbacks that must not re-create themselves on every recompute
   const resultRef = useRef(result)
   resultRef.current = result
@@ -223,11 +233,22 @@ export default function App() {
         say('The official source returned no rows — try again later.')
         return
       }
-      // Merge outside the state updater: updaters run at commit time, so a
-      // count captured inside one is not readable here.
-      const merged = mergeDraws(game.draws, outcome.draws)
-      updateGame(gameId, (g) => ({ ...g, draws: merged.merged }))
-      if (merged.added > 0) say(`${game.name}: ${merged.added} new draw${merged.added === 1 ? '' : 's'} added — model retrained.`)
+      /*
+       * Merge inside the updater, against whatever the game holds at commit
+       * time. Merging against the snapshot this callback closed over and then
+       * assigning the result wholesale silently deleted anything added during
+       * the fetch — add a result, or import, or delete a row while a sync is
+       * in flight and it was gone when the sync landed. `mergeDraws` is pure,
+       * so the count comes back through a ref for the toast below.
+       */
+      const addedRef = { n: 0 }
+      updateGame(gameId, (g) => {
+        const merged = mergeDraws(g.draws, outcome.draws)
+        addedRef.n = merged.added
+        return { ...g, draws: merged.merged }
+      })
+      const added = addedRef.n
+      if (added > 0) say(`${game.name}: ${added} new draw${added === 1 ? '' : 's'} added — model retrained.`)
       else if (!silentWhenCurrent) say(`${game.name} is already up to date.`)
       void hydrateSales(gameId, game.syncKey)
     } catch (err) {
@@ -609,6 +630,11 @@ export default function App() {
                 </div>
               )}
               <RecapBanner
+                /* Keyed: `since` is a lazy initialiser read once per mount, so
+                   without a remount a game switch renders one game's recap
+                   against the other's last-seen date — suppressing the new
+                   game's draws entirely, or re-announcing ones already seen. */
+                key={`recap-${activeGame?.id ?? ''}`}
                 res={result}
                 draws={draws}
                 gameId={activeGame?.id ?? ''}
@@ -642,6 +668,11 @@ export default function App() {
                 </div>
               )}
               <RecapBanner
+                /* Keyed: `since` is a lazy initialiser read once per mount, so
+                   without a remount a game switch renders one game's recap
+                   against the other's last-seen date — suppressing the new
+                   game's draws entirely, or re-announcing ones already seen. */
+                key={`recap-${activeGame?.id ?? ''}`}
                 res={result}
                 draws={draws}
                 gameId={activeGame?.id ?? ''}
@@ -685,6 +716,7 @@ export default function App() {
               <CombosPanel res={result} />
               <TrendsPanel
                 res={result}
+                draws={draws}
                 settings={settings}
                 onWindowChange={(w) => updateActiveSettings({ exploreWindow: w })}
               />
@@ -717,6 +749,11 @@ export default function App() {
       </footer>
       </div>
 
+      {engineError && (
+        <div className="computing" role="alert">
+          Could not analyse this history: {engineError}
+        </div>
+      )}
       {(computing || syncing) && hasData && (
         <div className="computing"><span className="spinner" /> {syncing ? 'Syncing official results…' : 'Recalculating…'}</div>
       )}
