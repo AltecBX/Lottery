@@ -194,18 +194,56 @@ describe('portfolio coverage', () => {
     for (const t of spread.tickets) expect(new Set(t.numbers).size).toBe(5)
   })
 
-  it('spreads the bonus ball past the model’s short candidate list', () => {
-    // the engine only ranks a handful of bonus candidates; the rest of the pool fills in
+  it('deals five distinct bonus balls that change with the seed', () => {
+    /*
+     * Two failed designs live in this test's history. Indexing the bonus by
+     * ticket position ignored the seed entirely — the same five balls on every
+     * deal. Rotating the ranked order fixed that and put 15-16-17-18-19 on the
+     * user's screen, because everything after the ranked picks is 1..K
+     * ascending and a rotated window of it is consecutive integers. The dealer
+     * now samples without replacement, weighted by the model's own claims.
+     */
     const spread = buildPortfolio(opts)
-    const specials = spread.tickets.map((t) => t.special)
+    const specials = spread.tickets.map((t) => t.special!)
     expect(new Set(specials).size).toBe(5)
-    // Consecutive entries of the ranked order, wherever the seed starts it.
-    const order = [19, 3, 21, ...Array.from({ length: 26 }, (_, i) => i + 1).filter((n) => ![19, 3, 21].includes(n))]
-    const at = order.indexOf(specials[0]!)
-    expect(at).toBeGreaterThanOrEqual(0)
-    expect(specials).toEqual([0, 1, 2, 3, 4].map((i) => order[(at + i) % order.length]))
+    for (const s of specials) { expect(s).toBeGreaterThanOrEqual(1); expect(s).toBeLessThanOrEqual(26) }
+    // not a consecutive run — the tell of the rotation bug
+    const sorted = [...specials].sort((a, b) => a - b)
+    expect(sorted.every((v, i) => i === 0 || v - sorted[i - 1] === 1)).toBe(false)
+    // and the seed genuinely re-deals them
+    const other = buildPortfolio({ ...opts, seed: 99 }).tickets.map((t) => t.special!)
+    expect(other.join(',')).not.toBe(specials.join(','))
     // matching the bonus alone already pays, so spread must not lose to a quick pick here
     expect(spread.stats.pAnyPrize).toBeGreaterThan(spread.concentrated.pAnyPrize)
+  })
+
+  it('does not deal the same top numbers into every ticket of every deal', () => {
+    /*
+     * The user's screenshot: three consecutive deals where number 36 sat in
+     * all fifteen tickets and one ticket was byte-identical every time. The
+     * model's own claim for its top number was 1.30× the bottom one; the old
+     * weight curve stretched that to a fixed 17×, so the sampler dealt the
+     * same "hot" numbers into essentially every candidate. The weights now
+     * equal the claims, so a number can dominate only if the model can prove
+     * that domination.
+     */
+    const flat = new Float64Array(70)
+    for (let i = 1; i <= 69; i++) flat[i] = 0.062 + 0.019 * ((70 - i) / 69) // the live model's real spread
+    const seen = new Map<number, number>()
+    const dealt = new Set<string>()
+    let tickets = 0
+    for (let seed = 1; seed <= 10; seed++) {
+      const r = buildPortfolio({ ...opts, scores: flat, spread: 0.65, seed, trials: 200 })
+      dealt.add(r.tickets.map((t) => t.numbers.join('-')).join('|'))
+      for (const t of r.tickets) {
+        tickets++
+        for (const n of new Set(t.numbers)) seen.set(n, (seen.get(n) ?? 0) + 1)
+      }
+    }
+    expect(dealt.size).toBe(10)
+    const most = Math.max(...seen.values())
+    // With honest 1.3× weights nothing should be anywhere near every ticket.
+    expect(most / tickets).toBeLessThan(0.6)
   })
 
   it('re-deals every ticket when the seed changes, bonus balls included', () => {

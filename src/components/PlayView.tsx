@@ -80,6 +80,7 @@ export function PlayView({ res, game, draws, drawTime, feed, onSetJackpot, onSav
       D: res.drawSize,
       specialK: res.special?.K ?? 0,
       specialPicks: res.special?.picks.map((p) => p.number) ?? [],
+      specialProbs: res.special?.picks.map((p) => p.probability) ?? [],
       count: 5,
       spread: 0.65,
       shape,

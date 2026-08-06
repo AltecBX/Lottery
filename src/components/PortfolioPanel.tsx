@@ -79,6 +79,7 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
   }, [res.predictions, res.K])
 
   const specialPicks = useMemo(() => res.special?.picks.map((p) => p.number) ?? [], [res.special])
+  const specialProbs = useMemo(() => res.special?.picks.map((p) => p.probability) ?? [], [res.special])
 
   /*
    * Keep suggested tickets to shapes this game actually produces. Ranking
@@ -107,6 +108,7 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
       D: res.drawSize,
       specialK: res.special?.K ?? 0,
       specialPicks,
+      specialProbs,
       count,
       spread,
       shape,

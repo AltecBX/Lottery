@@ -108,12 +108,6 @@ function weightedSubset(
 const TICKET_TRIES = 1200
 
 /**
- * How far below the best a ticket may score and still count as its equal,
- * as a fraction of the spread one ticket can span. See `pickTicket`.
- */
-const TIE_SLACK = 0.02
-
-/**
  * Choose one ticket: the best-scoring combination that both looks like a draw
  * of this game and introduces exactly `fresh` numbers no earlier ticket used.
  *
@@ -128,6 +122,7 @@ function pickTicket(
   scores: Float64Array, K: number, D: number, used: Int32Array,
   fresh: number, shape: PortfolioShape | null, rnd: () => number,
   exclude?: Set<string>, accept?: ((sorted: number[]) => boolean) | null,
+  best = false,
 ): number[] {
   let hi = -Infinity
   let lo = Infinity
@@ -136,8 +131,25 @@ function pickTicket(
     if (scores[n] < lo) lo = scores[n]
   }
   const range = Math.max(1e-9, hi - lo)
+  /*
+   * The sampler's preference for a number is exactly the model's claim about
+   * it — the probabilities themselves when the scores are probabilities, a
+   * mild exponential otherwise (z-scores can be negative).
+   *
+   * This line is where the "every deal looks the same" bug lived. The old
+   * weights exp((s−lo)/(0.35·range)) stretched ANY score spread to a fixed
+   * 17× top-to-bottom ratio — the live model's own claim was 1.30× — so the
+   * top-scoring number was dealt into essentially every sampled candidate,
+   * one ticket's split had a single viable answer that froze across seeds,
+   * and five "different" deals were permutations of the same eighteen
+   * numbers. The model earns exactly the tilt it can demonstrate, no more.
+   */
   const weights = new Float64Array(K + 1)
-  for (let n = 1; n <= K; n++) weights[n] = Math.exp((scores[n] - lo) / (range * 0.35))
+  if (lo > 0) {
+    for (let n = 1; n <= K; n++) weights[n] = scores[n]
+  } else {
+    for (let n = 1; n <= K; n++) weights[n] = Math.exp((scores[n] - hi) / range)
+  }
 
   const unusedPool: number[] = []
   const usedPool: number[] = []
@@ -155,57 +167,61 @@ function pickTicket(
     ...usedPool.slice().sort(byValue).slice(0, wantRepeat),
   ].sort((a, b) => a - b)
 
-  /*
-   * The highest total this split can reach, valid or not — the anchor the
-   * search measures against. It never moves, so "near-optimal" means the same
-   * thing on every trial.
-   *
-   * Anything within `slack` of it is treated as an equal and one is chosen at
-   * random, which is both what makes a re-deal actually re-deal and the honest
-   * reading of the scores. Seeding the search with `greedy` and keeping strict
-   * argmax froze every ticket whose greedy pick happened to be in shape: greedy
-   * IS the maximum, so no sampled candidate could ever beat it and the seed
-   * changed nothing. On a live model that pinned the first two of five tickets
-   * across every re-deal.
-   *
-   * The slack is a fraction of the spread a whole ticket can span, D·(hi−lo),
-   * so it scales with the scores and works whether they are probabilities or
-   * z-scores. At 2% of that span it admits combinations within about half a
-   * percent of the best — 77 of them on a live Powerball model, against a top-1
-   * to top-25 score gap of 11%, which is well inside the noise those scores
-   * carry anyway.
-   */
-  const slack = TIE_SLACK * D * range
-  const anchor = greedy.reduce((s, n) => s + scores[n], 0)
-  const greedyOk = (!shape || inShape(greedy, shape)) && allowed(greedy)
-  let best: number[] | null = greedyOk ? greedy : null
-  let ties = greedyOk ? 1 : 0
-  // Kept only for the case where nothing at all reaches the near-optimal band.
-  let fallback: number[] | null = best
-  let fallbackValue = greedyOk ? anchor : -Infinity
-
   const cand: number[] = []
   const partA: number[] = []
   const partB: number[] = []
+
+  if (best) {
+    // The deterministic top pick — the zero-spread slider position and the
+    // "concentrated" baseline ask for THE best ticket, so argmax is the point
+    // here, not a bug. Greedy is that maximum whenever it is legal.
+    if ((!shape || inShape(greedy, shape)) && allowed(greedy)) {
+      for (const n of greedy) used[n]++
+      return greedy
+    }
+    let bestCand: number[] = greedy
+    let bestValue = -Infinity
+    for (let t = 0; t < TICKET_TRIES; t++) {
+      weightedSubset(weights, unusedPool, wantFresh + topUp, rnd, partA)
+      weightedSubset(weights, usedPool, wantRepeat, rnd, partB)
+      cand.length = 0
+      cand.push(...partA, ...partB)
+      cand.sort((a, b) => a - b)
+      if ((shape && !inShape(cand, shape)) || !allowed(cand)) continue
+      let v = 0
+      for (const n of cand) v += scores[n]
+      if (v > bestValue) { bestValue = v; bestCand = cand.slice() }
+    }
+    for (const n of bestCand) used[n]++
+    return bestCand
+  }
+
+  /*
+   * A deal, not a search. The weighted sampling already expresses the model's
+   * preference, so the first candidate that clears the shape and the pool IS a
+   * draw from the honest distribution — taking the best of 1,200 instead
+   * would sharpen right back to the argmax this function just stopped being.
+   */
+  let fallback: number[] | null = null
+  let fallbackValue = -Infinity
   for (let t = 0; t < TICKET_TRIES; t++) {
     weightedSubset(weights, unusedPool, wantFresh + topUp, rnd, partA)
     weightedSubset(weights, usedPool, wantRepeat, rnd, partB)
     cand.length = 0
     cand.push(...partA, ...partB)
     cand.sort((a, b) => a - b)
-    if ((shape && !inShape(cand, shape)) || !allowed(cand)) continue
-    let v = 0
-    for (const n of cand) v += scores[n]
-    if (v >= anchor - slack) {
-      // Reservoir sampling: every near-optimal candidate is equally likely to
-      // be the one returned, so the deal is genuinely re-dealt.
-      ties++
-      if (rnd() * ties < 1) best = cand.slice()
+    if (shape && !inShape(cand, shape)) continue
+    if (!allowed(cand)) {
+      // Right shape, wrong pool — remembered in case nothing fully passes.
+      let v = 0
+      for (const n of cand) v += scores[n]
+      if (v > fallbackValue) { fallbackValue = v; fallback = cand.slice() }
+      continue
     }
-    if (v > fallbackValue) { fallbackValue = v; fallback = cand.slice() }
+    for (const n of cand) used[n]++
+    return cand
   }
-
-  const chosen = best ?? fallback ?? greedy
+  const chosen = fallback ?? greedy
   for (const n of chosen) used[n]++
   return chosen
 }
@@ -331,6 +347,11 @@ export interface PortfolioOptions {
    * from, so the two features never disagree about what is worth playing.
    */
   accept?: ((sorted: number[]) => boolean) | null
+  /**
+   * Calibrated probabilities aligned with `specialPicks`, so the bonus dealer
+   * can weight each ball by exactly what the model claims for it.
+   */
+  specialProbs?: number[]
   trials?: number
   seed?: number
   tiers?: PrizeTier[]
@@ -367,19 +388,51 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
     if (!seenSpecial.has(s)) { seenSpecial.add(s); specialOrder.push(s) }
   }
   /*
-   * Where in that ranking the set starts. Without this the bonus balls were
-   * `specialOrder[t]` — the same five, in the same order, on every deal no
-   * matter the seed, so a re-deal visibly changed the mains and left the bonus
-   * column untouched.
+   * The bonus balls are dealt the same way the mains are: sampled without
+   * replacement, weighted by what the model actually claims. Its calibrated
+   * claim is small — the top pick hits 4.13% against 3.85% by chance — so the
+   * weights are nearly flat and the deal is nearly uniform, which is honest.
    *
-   * Rotating rather than reranking costs almost nothing: the bonus model picks
-   * its top ball 4.13% of the time against 3.85% by chance, so which slice of
-   * the ranking a set takes is worth about a quarter of a percentage point —
-   * far less than the deal genuinely being a different deal.
+   * Two earlier versions both failed visibly. Indexing by ticket position
+   * ignored the seed, so the bonus column never changed; rotating the ranked
+   * order fixed that and produced 15-16-17-18-19 down the screen, because
+   * everything after the few ranked picks is just 1..K ascending and a rotated
+   * window of it is a run of consecutive integers. Nothing that *looks* that
+   * artificial should come out of a dealer.
    */
-  const specialShift = specialOrder.length > 0
-    ? Math.floor(mulberry32(seed ^ 0x5bf03635)() * specialOrder.length) % specialOrder.length
-    : 0
+  const specialWeights = new Float64Array(specialOrder.length)
+  if (specialK > 0) {
+    let claimed = 0
+    let nRanked = 0
+    for (let i = 0; i < specialOrder.length; i++) {
+      const p = opts.specialProbs?.[i]
+      if (i < specialPicks.length && p !== undefined && p > 0 && p < 1) {
+        specialWeights[i] = p
+        claimed += p
+        nRanked++
+      }
+    }
+    const rest = specialOrder.length - nRanked
+    const share = rest > 0 ? Math.max(1e-9, 1 - claimed) / rest : 0
+    for (let i = 0; i < specialOrder.length; i++) if (specialWeights[i] === 0) specialWeights[i] = share
+  }
+  const dealSpecials = (want: number, r: () => number): number[] => {
+    const idx = specialOrder.map((_, i) => i)
+    const w = Array.from(specialWeights)
+    const out: number[] = []
+    while (out.length < want && specialOrder.length > 0) {
+      if (idx.length === 0) { for (let i = 0; i < specialOrder.length; i++) { idx.push(i); w[i] = specialWeights[i] } }
+      let total = 0
+      for (const i of idx) total += w[i]
+      let roll = r() * total
+      let at = 0
+      for (; at < idx.length - 1; at++) { roll -= w[idx[at]]; if (roll <= 0) break }
+      out.push(specialOrder[idx[at]])
+      idx.splice(at, 1)
+    }
+    return out
+  }
+  const dealtSpecials = specialK > 0 ? dealSpecials(count, mulberry32(seed ^ 0x5bf03635)) : []
 
   const shape = opts.shape ?? null
 
@@ -405,20 +458,19 @@ export function buildPortfolio(opts: PortfolioOptions): PortfolioResult {
     const fresh = t === 0
       ? D
       : Math.round((budget * t) / (count - 1)) - Math.round((budget * (t - 1)) / (count - 1))
-    const numbers = pickTicket(scores, K, D, used, fresh, shape, mulberry32(seed + t * 7919), opts.exclude, opts.accept)
+    // Zero spread means "the model's one pick, repeated" — the only setting
+    // where a deterministic argmax is the documented behaviour.
+    const numbers = pickTicket(scores, K, D, used, fresh, shape, mulberry32(seed + t * 7919), opts.exclude, opts.accept, spread === 0)
     const ticket: PortfolioTicket = { numbers }
     if (specialK > 0) {
-      // At zero spread every ticket is one pick repeated, bonus ball included
-      ticket.special = spread === 0
-        ? specialOrder[specialShift]
-        : specialOrder[(specialShift + t) % specialOrder.length]
+      ticket.special = spread === 0 ? specialOrder[0] : dealtSpecials[t % dealtSpecials.length]
     }
     tickets.push(ticket)
   }
 
   // Same count, every ticket identical to the model's single best pick
   const topUsed = new Int32Array(K + 1)
-  const top = pickTicket(scores, K, D, topUsed, D, shape, mulberry32(seed), opts.exclude, opts.accept)
+  const top = pickTicket(scores, K, D, topUsed, D, shape, mulberry32(seed), opts.exclude, opts.accept, true)
   const concentrated: PortfolioTicket[] = Array.from({ length: count }, () => {
     const t: PortfolioTicket = { numbers: top }
     if (specialK > 0) t.special = specialPicks[0] ?? 1
