@@ -38,6 +38,7 @@ import { ConstraintLabPanel } from './components/ConstraintLabPanel.tsx'
 import { ValuePanel } from './components/ValuePanel.tsx'
 import { RecapBanner } from './components/RecapBanner.tsx'
 import { PlayView } from './components/PlayView.tsx'
+import { PredictionBoard } from './components/PredictionBoard.tsx'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 import { AddGameDialog } from './components/AddGameDialog.tsx'
 import { BrandLockup, JerryLockup } from './components/Logo.tsx'
@@ -652,6 +653,7 @@ export default function App() {
                 onSaveTicket={saveTicket}
                 onOpenLab={() => goLab()}
               />
+              <PredictionBoard res={result} draws={draws} />
             </div>
           )}
 

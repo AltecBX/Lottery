@@ -19,6 +19,7 @@ import { calendarRate, crowdMarkers, uncrowded } from '../engine/crowd.ts'
 import { choose, matchOdds } from '../engine/odds.ts'
 import { flipUnits } from '../components/FlipClock.tsx'
 import { resolveNextDraw } from '../components/NextDraw.tsx'
+import { boardCells } from '../components/PredictionBoard.tsx'
 import { decodeHistory, encodeHistory, historyUrl } from '../engine/history.ts'
 import { dowOf } from '../engine/dates.ts'
 import { countdownTo } from '../engine/drawtime.ts'
@@ -432,6 +433,28 @@ describe('counting a portfolio exactly', () => {
     const a = scorePortfolio(five, 69, 5, 26, 20000, 1)
     const b = scorePortfolio(five, 69, 5, 26, 20000, 999)
     expect(a).toEqual(b)
+  })
+})
+
+describe('the board', () => {
+  it('lays the pool out in numeric order however the values arrive', () => {
+    /*
+     * `predictions` arrives sorted strongest-first, and the board was rendering
+     * in that order: ten to a row starting 50, 48, 29… Every row is supposed to
+     * be a decade, which is the only reason a grid beats a list here.
+     */
+    const ranked = [{ n: 50, value: 9 }, { n: 3, value: 1 }, { n: 27, value: 5 }, { n: 11, value: 4 }]
+    expect(boardCells(ranked, 5).map((c) => c.n)).toEqual([3, 11, 27, 50])
+  })
+
+  it('scales the shading to the widest gap, keeping the sign', () => {
+    const cells = boardCells([{ n: 1, value: 0 }, { n: 2, value: 10 }, { n: 3, value: 5 }], 5)
+    expect(cells.map((c) => c.t)).toEqual([-1, 1, 0])
+  })
+
+  it('does not divide by zero when every number reads the same', () => {
+    const flat = boardCells([{ n: 1, value: 7 }, { n: 2, value: 7 }], 7)
+    expect(flat.every((c) => c.t === 0)).toBe(true)
   })
 })
 
