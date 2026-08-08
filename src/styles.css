@@ -1332,6 +1332,69 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
 .play-held-list { display: grid; gap: 7px; padding: 10px 13px 12px; }
 .play-held-row { display: flex; gap: 5px; flex-wrap: nowrap; }
 
+/* ---------- The board: the whole pool, shaded ---------- */
+.bd-card { display: grid; gap: 12px; }
+.bd-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bd-head h2 { font-size: 17px; margin: 0; }
+.bd-lenses {
+  display: inline-flex; margin-left: auto;
+  border: 1px solid var(--border); border-radius: 11px; overflow: hidden;
+}
+.bd-lenses button {
+  border: 0; background: transparent; color: var(--ink-2); cursor: pointer;
+  padding: 7px 11px; font-size: 12.5px; font-weight: 640; min-height: 38px;
+}
+.bd-lenses button + button { border-left: 1px solid var(--border); }
+.bd-lenses button.on { background: color-mix(in srgb, var(--gold) 16%, transparent); color: var(--gold); }
+
+.bd-pick { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bd-pick-label { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.bd-pick .balls { display: flex; gap: 6px; }
+
+/* Ten to a row, the way a play slip reads, so the rows are the decades.
+   minmax(0, 1fr), not 1fr: a bare 1fr is minmax(auto, 1fr), and the automatic
+   minimum of a square cell is taken from its own aspect ratio — which came out
+   0.37px wider than its share and pushed the tenth column 4px off the card. */
+.bd-grid { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 4px; }
+.bd-cell {
+  aspect-ratio: 1; display: grid; place-items: center; border-radius: 8px;
+  font-size: 12px; font-weight: 650; color: var(--ink-2);
+  border: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+/* Six steps each way. Quantised on purpose — see the note in PredictionBoard. */
+.bd-cell.pos.l1 { background: color-mix(in srgb, var(--gold) 9%, transparent); }
+.bd-cell.pos.l2 { background: color-mix(in srgb, var(--gold) 20%, transparent); }
+.bd-cell.pos.l3 { background: color-mix(in srgb, var(--gold) 33%, transparent); color: var(--ink); }
+.bd-cell.pos.l4 { background: color-mix(in srgb, var(--gold) 48%, transparent); color: var(--ink); }
+.bd-cell.pos.l5 { background: color-mix(in srgb, var(--gold) 66%, transparent); color: var(--ink); }
+.bd-cell.neg.l1 { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.bd-cell.neg.l2 { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+.bd-cell.neg.l3 { background: color-mix(in srgb, var(--ink) 10%, transparent); color: var(--muted); }
+.bd-cell.neg.l4 { background: color-mix(in srgb, var(--ink) 13%, transparent); color: var(--muted); }
+.bd-cell.neg.l5 { background: color-mix(in srgb, var(--ink) 16%, transparent); color: var(--muted); }
+.bd-cell.picked {
+  border-color: var(--gold); border-width: 2px; color: var(--gold);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--gold) 22%, transparent);
+  font-weight: 800;
+}
+
+.bd-legend { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.bd-scale { display: inline-flex; height: 9px; width: 96px; border-radius: 999px; overflow: hidden; border: 1px solid var(--border); }
+.bd-scale i { flex: 1 1 auto; }
+.bd-scale i.neg { background: color-mix(in srgb, var(--ink) 16%, transparent); }
+.bd-scale i.zero { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.bd-scale i.pos { background: color-mix(in srgb, var(--gold) 66%, transparent); }
+.bd-range { font-size: 12.5px; font-weight: 640; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.bd-sub { margin: 4px 0 0; }
+.bd-sub-note { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); }
+.bd-note { display: block; }
+
+@media (max-width: 379px) {
+  .bd-grid { gap: 3px; }
+  .bd-cell { font-size: 11px; border-radius: 7px; }
+}
+
 /* Split risk: a note about what a win pays, never about whether it happens. */
 .crowd-note {
   border: 1px solid color-mix(in srgb, var(--gold) 34%, var(--border));
