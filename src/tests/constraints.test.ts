@@ -5,7 +5,7 @@ import {
 } from '../engine/constraints.ts'
 import {
   adjacencyAtLeast, analyzeConstraints, clusteredCombos, countRthAtMost, MIN_CONSTRAINT_HISTORY,
-  CHOSEN_CUTS, CUT_FAMILIES, MAX_CUT_STEP, narrowGroups, POOL_CUTS, poolWalkForward, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
+  activeCuts, CHOSEN_CUTS, CUT_FAMILIES, cutStatus, MAX_CUT_STEP, stillCut, narrowGroups, POOL_CUTS, poolWalkForward, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
   positionBandCount, sumAtMostCount, sumBoundedCombos, windowCount,
 } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
@@ -14,6 +14,7 @@ import { buildPortfolio } from '../engine/portfolio.ts'
 import { runEngine } from '../engine/engine.ts'
 import { DEFAULT_SETTINGS } from '../engine/types.ts'
 import { dowOf } from '../engine/dates.ts'
+import { dealPlay, playSetup, seedFor } from '../engine/play.ts'
 import type { Draw } from '../engine/types.ts'
 
 const K = 69
@@ -969,5 +970,99 @@ describe('testing the machine rather than the rules', () => {
     const balls = lab.fairness.find((f) => f.key === 'balls')!
     expect(balls.z).toBeGreaterThan(3)
     expect(balls.verdict).toBe('off the line')
+  })
+})
+
+describe('the cut list keeps its own promise', () => {
+  const withDraw = (base: Draw[], sorted: number[], daysAfter: number): Draw[] => {
+    const last = new Date(`${base[base.length - 1].date}T00:00:00Z`)
+    last.setUTCDate(last.getUTCDate() + daysAfter)
+    const date = last.toISOString().slice(0, 10)
+    return [...base, { date, dow: dowOf(date), numbers: sorted, sorted }]
+  }
+
+  it('cuts a proven-absent family only while it stays absent, a chosen one only at the count it was chosen', () => {
+    expect(stillCut('runFive', 0)).toBe(true)
+    expect(stillCut('runFive', 1)).toBe(false)
+    expect(stillCut('tightSpan', 1)).toBe(true)
+    expect(stillCut('tightSpan', 2)).toBe(false)
+    expect(stillCut('allPrime', 0)).toBe(false) // never on the list at all
+  })
+
+  it('releases a family the moment it is drawn, and says which draw did it', () => {
+    /*
+     * The list was a constant. Mega Millions drew 36-39-42-45-48 on 2016-10-11
+     * — an even progression, a "never drawn" family — and the app went on
+     * cutting that shape from every Mega Millions deal under that label.
+     */
+    const base = fairDraws(900, 7707)
+    const before = analyzeConstraints(base, K, D)!
+    expect(before.cuts!.find((c) => c.key === 'runFive')!.active).toBe(true)
+    expect(activeCuts(before).has('runFive')).toBe(true)
+
+    const after = analyzeConstraints(withDraw(base, [30, 31, 32, 33, 34], 3), K, D)!
+    const run = after.cuts!.find((c) => c.key === 'runFive')!
+    expect(run).toMatchObject({ active: false, drawn: 1 })
+    expect(run.last).toBe(withDraw(base, [30, 31, 32, 33, 34], 3).at(-1)!.date)
+    expect(activeCuts(after).has('runFive')).toBe(false)
+    // Everything else on the list is untouched
+    for (const c of after.cuts!) if (c.key !== 'runFive' && c.key !== 'evenStepTight') expect(c.active).toBe(before.cuts!.find((b) => b.key === c.key)!.active)
+  })
+
+  it('charges the draw that breaks a family, and no draw after it', () => {
+    const base = fairDraws(900, 7707)
+    const first = [30, 31, 32, 33, 34]
+    const second = [40, 41, 42, 43, 44]
+    const draws = withDraw(withDraw(base, first, 3), second, 6)
+    const lab = analyzeConstraints(draws, K, D)!
+    const deep = lab.modes.find((m) => m.key === 'deep')!
+    const verdicts = poolWalkForward(lab, deep, draws)
+    const runLabel = structuralFamilies(K, D).find((f) => f.key === 'runFive')!.label
+    const v1 = verdicts.find((v) => v.date === draws.at(-2)!.date)!
+    const v2 = verdicts.find((v) => v.date === draws.at(-1)!.date)!
+    // On the list when it arrived: the first run cannot have been kept
+    expect(v1.kept).toBe(false)
+    // Off the list from then on: whatever else judges the second, the family does not
+    expect(v2.cutBy).not.toBe(runLabel)
+  })
+
+  it('agrees with the counts the cuts were chosen from', () => {
+    // Every proven-absent family starts at zero on a fair record this size
+    const lab = analyzeConstraints(fairDraws(900, 7707), K, D)!
+    for (const c of lab.cuts!) {
+      expect(c.kind).toBe(CUT_FAMILIES.has(c.key) ? 'unseen' : 'chosen')
+      expect(c.active).toBe(stillCut(c.key, c.drawn))
+    }
+    expect(lab.cuts!.map((c) => c.key).sort()).toEqual([...POOL_CUTS].sort())
+    void CHOSEN_CUTS
+    void cutStatus
+  })
+})
+
+describe('the Play screen deals each draw its own five', () => {
+  it('keys the deal to the draw date: same date, same five; next draw, new five', () => {
+    expect(seedFor('2026-09-28')).toBe(seedFor('2026-09-28'))
+    expect(seedFor('2026-09-28')).not.toBe(seedFor('2026-09-30'))
+
+    /*
+     * The regression this pins: replaying the 23 Powerball draws after
+     * 2026-08-03, the constant seed dealt 7-20-27-50-66, 7-14-35-50-51 and
+     * the rest before every one of them. Consecutive histories move the
+     * model's weights by too little to change a sample from an identical
+     * random stream, so only the seed can make the deal move.
+     */
+    const draws = fairDraws(700, 9091)
+    const earlier = draws.slice(0, -1)
+    const past = (ds: Draw[]) => new Set(ds.map((d) => d.sorted.join('-')))
+    const resA = runEngine(earlier, DEFAULT_SETTINGS)
+    const resB = runEngine(draws, DEFAULT_SETTINGS)
+    expect(resA.nextDate).not.toBe(resB.nextDate)
+    const dealA = dealPlay(resA, playSetup(resA, past(earlier)), past(earlier), seedFor(resA.nextDate))
+    const dealB = dealPlay(resB, playSetup(resB, past(draws)), past(draws), seedFor(resB.nextDate))
+    const keys = (t: { numbers: number[] }[]) => t.map((x) => x.numbers.join('-'))
+    expect(keys(dealB)).not.toEqual(keys(dealA))
+    // and reopening the app for the same draw shows the same five
+    const again = dealPlay(resB, playSetup(resB, past(draws)), past(draws), seedFor(resB.nextDate))
+    expect(keys(again)).toEqual(keys(dealB))
   })
 })

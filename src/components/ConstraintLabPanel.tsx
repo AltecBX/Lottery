@@ -328,6 +328,38 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
         </>
       )}
 
+      {lab.cuts && lab.cuts.length > 0 && (() => {
+        const unseen = lab.cuts.filter((c) => c.kind === 'unseen' && c.active)
+        const chosen = lab.cuts.filter((c) => c.kind === 'chosen' && c.active)
+        const released = lab.cuts.filter((c) => !c.active)
+        return (
+          <>
+            <div className="mini-title" style={{ marginTop: 18 }}>The cut list, checked against the whole record</div>
+            <p className="hint" style={{ display: 'block' }}>
+              {unseen.length} shape{unseen.length === 1 ? '' : 's'} cut because {unseen.length === 1 ? 'it has' : 'they have'} never
+              been drawn{chosen.length > 0 && <> and {chosen.length} cut by choice at {chosen.map((c) => `${c.drawn}×`).join(', ')}</>}.
+              The list is re-checked against every draw in the record each time the app runs, so a shape that turns up
+              comes off it on its own — nothing here can go on being called "never drawn" after it has been.
+            </p>
+            {released.length > 0 && (
+              <div className="cl-presets">
+                {released.map((c) => (
+                  <div className="cl-preset" key={c.key}>
+                    <div className="cl-preset-head">
+                      <span className="cl-preset-name">{c.label}</span>
+                      <span className="cl-preset-combos">released</span>
+                    </div>
+                    <div className="cl-preset-figs">
+                      drawn <b>{c.drawn}×</b>, most recently {c.last} — so it is no longer cut from this game's pool
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )
+      })()}
+
       {lab.presets.length > 0 && (
         <>
           <div className="mini-title" style={{ marginTop: 18 }}>The shapes you can spot by sorting — priced exactly</div>

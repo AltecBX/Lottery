@@ -2,9 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import type { Draw, EngineResult } from '../engine/types.ts'
 import type { GameData, SavedTicket } from '../engine/games.ts'
 import type { JackpotFeed } from '../engine/feed.ts'
-import { buildPortfolio, exactPortfolioStats, type PortfolioTicket } from '../engine/portfolio.ts'
-import { reducedPoolAcceptor } from '../engine/constraintlab.ts'
-import { uncrowded } from '../engine/crowd.ts'
+import { exactPortfolioStats, type PortfolioTicket } from '../engine/portfolio.ts'
+import { CUTS_SET_ON } from '../engine/constraintlab.ts'
+import { PLAY_COUNT, dealPlay, playSetup, seedFor } from '../engine/play.ts'
 import { DOW_NAMES, formatDate } from '../engine/dates.ts'
 import { drawTimeLabel } from '../engine/drawtime.ts'
 import { NextDrawStrip } from './NextDraw.tsx'
@@ -46,92 +46,43 @@ export function PlayView({ res, game, draws, drawTime, feed, savedTickets, onSet
    */
   const [locks, setLocks] = useState<Record<number, PortfolioTicket>>({})
   const [deal, setDeal] = useState<{ seed: number; slots: Record<number, PortfolioTicket> }>(
-    () => ({ seed: 0x5eed, slots: {} }),
+    () => ({ seed: seedFor(res.nextDate), slots: {} }),
   )
 
-  const COUNT = 5
-
-  // A draw landing retires both the locks and anything held for the old date.
+  // A draw landing retires the locks and starts that draw's own deal.
   useEffect(() => {
     setLocks({})
-    setDeal({ seed: 0x5eed, slots: {} })
+    setDeal({ seed: seedFor(res.nextDate), slots: {} })
     setShowHeld(false)
   }, [res.nextDate])
 
   const pastWinners = useMemo(() => new Set(draws.map((d) => d.sorted.join('-'))), [draws])
-  /*
-   * The deepest pool, not a middling one. The Lab's ladder exists so the
-   * trade-off can be inspected; the Play screen has already made the choice —
-   * play from the smallest candidate list the record can still stand behind.
-   */
-  const mode = useMemo(() => {
-    const lab = res.constraintLab
-    if (!lab) return null
-    return lab.modes.find((m) => m.key === 'deep') ?? lab.modes[lab.modes.length - 1] ?? null
-  }, [res.constraintLab])
+  const setup = useMemo(() => playSetup(res, pastWinners), [res, pastWinners])
+  const mode = setup.mode
 
-  /*
-   * Two tests, both free. The pool decides which combinations look like draws
-   * this game produces; `uncrowded` drops the ones a lot of other people also
-   * play. Neither changes any ticket's odds — every combination is equally
-   * likely, which is exactly why preferring the uncrowded one costs nothing and
-   * leaves a jackpot split fewer ways.
-   */
-  const accept = useMemo(() => {
-    const lab = res.constraintLab
-    const crowdFree = uncrowded(res.K, pastWinners)
-    if (!lab || !mode) return crowdFree
-    const inPool = reducedPoolAcceptor(lab, mode, pastWinners)
-    return (sorted: number[]) => inPool(sorted) && crowdFree(sorted)
-  }, [res.constraintLab, res.K, mode, pastWinners])
-
-  const scores = useMemo(() => {
-    const s = new Float64Array(res.K + 1)
-    for (const p of res.predictions) s[p.number] = Math.max(1e-9, p.probability)
-    return s
-  }, [res.predictions, res.K])
-
-  const shape = useMemo(() => {
-    const lab = res.constraintLab
-    if (!lab || lab.positionBands.length !== res.drawSize) return null
-    const sumRule = lab.rules.find((r) => r.featureKey === 'sum' && r.alpha === 0.002)
-    return {
-      lo: lab.positionBands.map((b) => b.lo),
-      hi: lab.positionBands.map((b) => b.hi),
-      sumLo: sumRule?.lo ?? 0,
-      sumHi: sumRule?.hi ?? Number.MAX_SAFE_INTEGER,
-    }
-  }, [res.constraintLab, res.drawSize])
-
-  // The same five tickets Play together builds at its defaults — one source of
-  // truth, shown here without the machinery around it.
   const tickets = useMemo(() => {
     const slots = deal.slots
     const hold: PortfolioTicket[] = []
-    for (let i = 0; i < COUNT; i++) if (slots[i]) hold.push(slots[i])
-    const dealt = buildPortfolio({
-      scores,
-      K: res.K,
-      D: res.drawSize,
-      specialK: res.special?.K ?? 0,
-      specialPicks: res.special?.picks.map((p) => p.number) ?? [],
-      specialProbs: res.special?.picks.map((p) => p.probability) ?? [],
-      count: COUNT,
-      spread: 0.65,
-      shape,
-      exclude: pastWinners,
-      accept,
-      hold,
-      seed: deal.seed,
-      trials: 1000,
-    }).tickets
+    for (let i = 0; i < PLAY_COUNT; i++) if (slots[i]) hold.push(slots[i])
+    const dealt = dealPlay(res, setup, pastWinners, deal.seed, hold)
     // Held tickets come back first; put each one back in the slot it was kept in.
     const fresh = dealt.slice(hold.length)
     const out: PortfolioTicket[] = []
     let next = 0
-    for (let i = 0; i < COUNT; i++) out.push(slots[i] ?? fresh[next++])
+    for (let i = 0; i < PLAY_COUNT; i++) out.push(slots[i] ?? fresh[next++])
     return out
-  }, [scores, res.K, res.drawSize, res.special, shape, pastWinners, accept, deal])
+  }, [res, setup, pastWinners, deal])
+
+  /*
+   * The pool's record on draws it was never chosen from. Every family on the
+   * cut list was found by looking at the history first, so the in-sample
+   * figures are the pool marking its own homework; draws after CUTS_SET_ON are
+   * the only ones that test it. The line grows by one every draw.
+   */
+  const fresh = useMemo(() => {
+    const judged = res.backtest.points.filter((p) => p.date > CUTS_SET_ON && p.poolKept !== undefined)
+    return { total: judged.length, held: judged.filter((p) => p.poolKept).length }
+  }, [res.backtest.points])
 
   /*
    * Counted, not simulated. These events are rare enough that a simulation
@@ -260,7 +211,7 @@ export function PlayView({ res, game, draws, drawTime, feed, savedTickets, onSet
 
       <div className="play-actions">
         <button className="btn primary" onClick={saveAll} disabled={unsavedCount === 0}>
-          {unsavedCount === 0 ? '✓ All 5 saved' : `☆ Save ${unsavedCount === COUNT ? 'all 5' : `the other ${unsavedCount}`}`}
+          {unsavedCount === 0 ? '✓ All 5 saved' : `☆ Save ${unsavedCount === PLAY_COUNT ? 'all 5' : `the other ${unsavedCount}`}`}
         </button>
         <button className="btn" onClick={another}>
           ⟳ Another five{lockedCount > 0 ? ` (keep ${lockedCount})` : ''}
@@ -277,6 +228,15 @@ export function PlayView({ res, game, draws, drawTime, feed, savedTickets, onSet
         </p>
       )}
 
+      {mode && fresh.total > 0 && (
+        <p className="play-stat">
+          Since its cuts were set on {formatDate(CUTS_SET_ON)}, this pool has held the winner in{' '}
+          <b>{fresh.held} of {fresh.total}</b> draws — draws it was never chosen from. Its size predicts about{' '}
+          <b>{Math.round(fresh.total * mode.spaceShare)}</b>: a pool holds winners at the rate it holds combinations,
+          so a smaller one would have held fewer, never a larger share.
+        </p>
+      )}
+
       <p className="hint play-hint">
         Five games, lowest to highest, learned from {res.drawCount.toLocaleString()} draws
         {/* Rounded, and rounded high: on top of the pool's own cuts the acceptor
@@ -289,8 +249,8 @@ export function PlayView({ res, game, draws, drawTime, feed, savedTickets, onSet
         )}
         . Spread to cover different numbers, never a past jackpot, never a shape this game has not produced, and never a
         combination the whole country plays — that last one changes no odds at all, it just means a jackpot you win is
-        split fewer ways. <em>Another five</em> deals a fresh set from the same pool; tap a game's number to keep it
-        through the deal.
+        split fewer ways. Every new draw gets its own deal; <em>Another five</em> deals a fresh set from the same pool,
+        and tapping a game's number keeps it through the deal.
       </p>
     </section>
   )

@@ -140,6 +140,12 @@ export interface ConstraintLab {
   /** Sorted-spreadsheet shapes priced exactly: combos, share, expected vs observed */
   presets: PresetElimination[]
   /**
+   * Every family on the cut list, counted across the full record, and whether
+   * the record still supports cutting it. Optional only so hand-built labs in
+   * tests keep working; the engine always sets it.
+   */
+  cuts?: CutStatus[]
+  /**
    * Tests of the machine rather than of any one rule. If combinations really do
    * come out uniformly, every family is priced fairly by necessity and no
    * further searching can turn one up — so this is the question that decides
@@ -642,6 +648,7 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
 
   return {
     K, drawSize: D, universe, evaluated, eraTrim, positionBands, presets, sumRecord, rejected, fairness,
+    cuts: cutStatus(allDraws, K, D),
     rules, modes, pareto, sampleSize: sample.size, verdict,
   }
 }
@@ -1054,8 +1061,78 @@ export const CHOSEN_CUTS = new Map([
   ['tightSpan', '44-45-47-50-51 on 2015-09-09'],
 ])
 
-/** Everything the pool actually removes: proven-absent plus chosen. */
+/** Everything the pool can remove: proven-absent plus chosen. */
 export const POOL_CUTS = new Set([...CUT_FAMILIES, ...CHOSEN_CUTS.keys()])
+
+/** Each chosen cut had been drawn exactly this many times when it was chosen. */
+export const CHOSEN_CUT_TOLERANCE = 1
+
+/**
+ * The last draw the cut list was set against. Every draw after it tests the
+ * families on data they were never chosen from — the only honest test they
+ * can get, because each family was found by looking at the record first.
+ */
+export const CUTS_SET_ON = '2026-08-03'
+
+/**
+ * Whether a family is still entitled to its place on the cut list, now that
+ * it has been drawn `drawn` times across the full record.
+ *
+ * The list used to be a constant, which quietly made a promise the code never
+ * checked: "cut only what has never been drawn". Drawn once tomorrow, a family
+ * would have stayed cut forever while the Lab went on calling it unseen. The
+ * rule is now enforced every time the engine runs. A proven-absent family goes
+ * the first time it appears; a chosen one — accepted at one occurrence — goes
+ * the moment a second one would make that choice a different decision.
+ */
+export function stillCut(key: string, drawn: number): boolean {
+  if (CUT_FAMILIES.has(key)) return drawn === 0
+  if (CHOSEN_CUTS.has(key)) return drawn <= CHOSEN_CUT_TOLERANCE
+  return false
+}
+
+/** One family on the cut list and whether the record still supports cutting it. */
+export interface CutStatus {
+  key: string
+  label: string
+  /** Times drawn across the full record, every era */
+  drawn: number
+  /** The most recent draw with this shape */
+  last: string | null
+  kind: 'unseen' | 'chosen'
+  active: boolean
+}
+
+/**
+ * Count every cut family across the full record — every era, because that is
+ * the record the cuts were chosen against, and a shape drawn in 2003 was still
+ * drawn.
+ */
+export function cutStatus(allDraws: Draw[], K: number, D: number): CutStatus[] {
+  return structuralFamilies(K, D)
+    .filter((f) => POOL_CUTS.has(f.key))
+    .map((f) => {
+      let drawn = 0
+      let last: string | null = null
+      for (const d of allDraws) {
+        if (d.sorted.length === D && f.test(d.sorted)) { drawn++; last = d.date }
+      }
+      return {
+        key: f.key,
+        label: f.label,
+        drawn,
+        last,
+        kind: CUT_FAMILIES.has(f.key) ? 'unseen' as const : 'chosen' as const,
+        active: stillCut(f.key, drawn),
+      }
+    })
+}
+
+/** The families the pool removes right now. */
+export function activeCuts(lab: ConstraintLab): Set<string> {
+  if (!lab.cuts) return new Set(POOL_CUTS)
+  return new Set(lab.cuts.filter((c) => c.active).map((c) => c.key))
+}
 
 /**
  * Combinations with at least `minPairs` adjacent pairs (values differing by 1).
@@ -1816,7 +1893,19 @@ export function poolWalkForward(
   const firstJudged = Math.max(0, draws.length - lab.evaluated)
   const judged = new Set<string>()
 
+  /*
+   * A family is judged by the cut list as it stood before each draw: counted
+   * across everything earlier, retired era included, since that is the record
+   * the cuts are chosen against. A family drawn at step i was genuinely on the
+   * list when draw i arrived — that draw is charged to it — and genuinely off
+   * the list for every draw after.
+   */
   const families = structuralFamilies(lab.K, D).filter((f) => POOL_CUTS.has(f.key))
+  const drawnBefore = new Map(families.map((f) => [f.key, 0]))
+  const countIn = (s: number[]) => {
+    for (const f of families) if (f.test(s)) drawnBefore.set(f.key, drawnBefore.get(f.key)! + 1)
+  }
+  if (eraInfo) for (const d of allDraws.slice(0, eraInfo.cutoffIndex)) if (d.sorted.length === D) countIn(d.sorted)
   const seen = new Set<string>()
   const out: PoolVerdict[] = []
   let lo = Number.POSITIVE_INFINITY
@@ -1835,11 +1924,12 @@ export function poolWalkForward(
       else if (s[D - 2] <= 5 || s[D - 1] <= 9) cutBy = 'position floor'
       else if (i > firstJudged && (total <= lo || total >= hi)) cutBy = 'record total'
       else {
-        const fam = families.find((f) => f.test(s))
+        const fam = families.find((f) => stillCut(f.key, drawnBefore.get(f.key)!) && f.test(s))
         if (fam) cutBy = fam.label
       }
       out.push({ date: d.date, kept: cutBy === null, cutBy })
     }
+    countIn(s)
     seen.add(key)
     if (total < lo) lo = total
     if (total > hi) hi = total
@@ -1855,7 +1945,8 @@ export function reducedPoolAcceptor(
   const passesMode = modePredicate(lab, mode)
   const D = lab.drawSize
   const rec = lab.sumRecord
-  const families = structuralFamilies(lab.K, D).filter((f) => POOL_CUTS.has(f.key))
+  const live = activeCuts(lab)
+  const families = structuralFamilies(lab.K, D).filter((f) => live.has(f.key))
   return (sorted: number[]): boolean => {
     if (sorted[D - 2] <= 5 || sorted[D - 1] <= 9) return false
     let total = 0
@@ -1902,6 +1993,21 @@ function* kSubsets(arr: number[], k: number): Generator<number[]> {
  * ticket inside it is still 1 in the full pool — the draw is made from the
  * whole space, not from the list.
  */
+/** What the family row has cost, read from the record rather than written in. */
+function familiesNote(lab: ConstraintLab): string {
+  const cuts = lab.cuts ?? []
+  const chosen = cuts.filter((c) => c.kind === 'chosen' && c.active)
+  const released = cuts.filter((c) => !c.active)
+  const taken = chosen.reduce((s, c) => s + c.drawn, 0)
+  let note = taken > 0
+    ? `cost 0 tested winners in this era — but the ${chosen.length} chosen cuts have taken ${taken} draw${taken === 1 ? '' : 's'} across the full record`
+    : 'cost 0 tested winners — none of these shapes has ever been drawn'
+  if (released.length) {
+    note += `; released after being drawn: ${released.map((c) => `${c.label} (${c.last})`).join(', ')}`
+  }
+  return note
+}
+
 export function reductionLedger(
   lab: ConstraintLab,
   mode: ConstraintMode,
@@ -1975,7 +2081,14 @@ export function reductionLedger(
   for (const combo of kSubsets(top9, D)) addCombo([...combo])
   // Structural families safe enough to cut: enumerated so their overlap with
   // everything above is exact rather than estimated.
-  const cutFams = structuralFamilies(K, D).filter((f) => POOL_CUTS.has(f.key))
+  const live = activeCuts(lab)
+  const cutFams = structuralFamilies(K, D).filter((f) => live.has(f.key))
+  // The groups below are a superset walk, cheap to enumerate; each member is
+  // only deducted if a family still on the list actually claims it, so a
+  // family released by a new draw drops out of the ledger on its own.
+  const addFamilyCombo = (combo: number[]) => {
+    if (cutFams.some((f) => f.test(combo))) addCombo(combo)
+  }
   if (cutFams.length) {
     const walk = (start: number, pick: number[]) => {
       if (pick.length === D) {
@@ -2006,14 +2119,14 @@ export function reductionLedger(
     // The narrow-set families read from the same definition that priced them,
     // so the row can never deduct a different family than the table charged for.
     for (const n of narrowGroups(K)) for (const g of n.groups) groups.push(g)
-    for (const g of groups) for (const combo of kSubsets(g, D)) addCombo([...combo])
+    for (const g of groups) for (const combo of kSubsets(g, D)) addFamilyCombo([...combo])
     // Even progressions are the one cut family that is not "all D from a single
     // small set", so the group walk above cannot reach them. Enumerate each
     // step's members directly — a few hundred combinations, and dedup against
     // everything already collected keeps the ledger's arithmetic exact.
     for (let step = 1; step <= MAX_CUT_STEP; step++) {
       for (let a = 1; a + (D - 1) * step <= K; a++) {
-        addCombo(Array.from({ length: D }, (_, i) => a + i * step))
+        addFamilyCombo(Array.from({ length: D }, (_, i) => a + i * step))
       }
     }
     void walk
@@ -2021,7 +2134,7 @@ export function reductionLedger(
   // Five in a row — the only clustered shape with no precedent. The wider
   // ≥3-touching-pairs family it sits inside has been drawn three times, so that
   // one is measured in the table above instead of deducted here.
-  for (let m = 1; m + D - 1 <= K; m++) addCombo(Array.from({ length: D }, (_, i) => m + i))
+  for (let m = 1; m + D - 1 <= K; m++) addFamilyCombo(Array.from({ length: D }, (_, i) => m + i))
 
   let familySurvivors = 0
   for (const combo of family.values()) {
@@ -2031,7 +2144,7 @@ export function reductionLedger(
   }
   push('families', 'Never-drawn families — five in a row, one last digit, one slip row or diagonal, shared multiples, narrow grid columns, even progressions, every 1-2-3-4-x — plus one decade, all multiples of five and the eight-number span, cut by choice',
     familySurvivors * sk,
-    'cost 0 tested winners in this era — but the three chosen cuts have taken 3 draws across the full record: 2-5-6-9-10, 5-15-25-30-40 and 44-45-47-50-51', true)
+    familiesNote(lab), true)
 
   // Totals at or beyond the era's records, enumerated member by member. The
   // regions are small enough to walk exactly: the low side directly, the high
