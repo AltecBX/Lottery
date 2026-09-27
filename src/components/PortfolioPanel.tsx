@@ -4,6 +4,7 @@ import type { SavedTicket } from '../engine/games.ts'
 import { buildPortfolio, lowerTierValue, type PortfolioStats } from '../engine/portfolio.ts'
 import { reducedPoolAcceptor } from '../engine/constraintlab.ts'
 import { uncrowded } from '../engine/crowd.ts'
+import { seedFor } from '../engine/play.ts'
 import { formatOdds, jackpotOdds } from '../engine/odds.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
 
@@ -119,9 +120,10 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
       shape,
       exclude: pastWinners,
       accept,
+      seed: seedFor(res.nextDate),
       trials: 60000,
     }),
-    [scores, res.K, res.drawSize, res.special?.K, specialPicks, count, spread, shape, pastWinners, accept],
+    [scores, res.K, res.drawSize, res.special?.K, specialPicks, count, spread, shape, pastWinners, accept, res.nextDate],
   )
 
   const { stats, quickPick, concentrated } = portfolio
