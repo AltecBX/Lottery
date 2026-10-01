@@ -125,6 +125,13 @@ export function ticketValue(
   ticketsSold: number | null,
   ticketPrice = 2,
   lowerTiers: { match: number; withSpecial: boolean; prize: number }[] = [],
+  /**
+   * The average multiplier on prizes below the jackpot — 3 for Mega Millions,
+   * whose every ticket carries one. Exact in expectation, not an
+   * approximation: the multiplier is assigned independently of the numbers, so
+   * E[prize × multiplier] = E[prize] × E[multiplier].
+   */
+  prizeMultiplier = 1,
 ): TicketValue {
   const jOdds = specialK > 0 ? jackpotOdds(K, D, specialK) : matchOdds(K, D, D)
   const pJackpot = 1 / jOdds
@@ -133,7 +140,7 @@ export function ticketValue(
   for (const tier of lowerTiers) {
     const pMains = 1 / matchOdds(K, D, tier.match)
     const p = specialK > 0 ? pMains * (tier.withSpecial ? 1 / specialK : 1 - 1 / specialK) : pMains
-    grossEv += p * tier.prize
+    grossEv += p * tier.prize * prizeMultiplier
   }
 
   // Sharing: other tickets are (near enough) independent draws from the pool
@@ -216,7 +223,7 @@ export function projectNextJackpot(draws: Draw[]): JackpotProjection | null {
   return { amount: last.jackpot! + gap * median(steps.slice(-30)), basis: 'rollover', samples: steps.length }
 }
 
-/** Published Powerball / Mega Millions style fixed lower tiers (US $2 games). */
+/** Powerball's published fixed prizes below the jackpot, for a $2 ticket. Mega Millions has its own — see pricing.ts. */
 export const US_LOWER_TIERS = [
   { match: 5, withSpecial: false, prize: 1_000_000 },
   { match: 4, withSpecial: true, prize: 50_000 },

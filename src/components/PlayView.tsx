@@ -4,6 +4,7 @@ import type { GameData, SavedTicket } from '../engine/games.ts'
 import type { JackpotFeed } from '../engine/feed.ts'
 import { exactPortfolioStats, type PortfolioTicket } from '../engine/portfolio.ts'
 import { CUTS_SET_ON } from '../engine/constraintlab.ts'
+import { pricingFor } from '../engine/pricing.ts'
 import { PLAY_COUNT, dealPlay, missingResults, playSetup, seedFor } from '../engine/play.ts'
 import { DOW_NAMES, formatDate } from '../engine/dates.ts'
 import { drawTimeLabel } from '../engine/drawtime.ts'
@@ -90,8 +91,8 @@ export function PlayView({ res, game, draws, drawTime, feed, savedTickets, onSet
    * whole line is only worth showing if the number in it is right.
    */
   const stats = useMemo(
-    () => exactPortfolioStats(tickets, res.K, res.drawSize, res.special?.K ?? 0),
-    [tickets, res.K, res.drawSize, res.special?.K],
+    () => exactPortfolioStats(tickets, res.K, res.drawSize, res.special?.K ?? 0, pricingFor(game?.syncKey).tiers),
+    [tickets, res.K, res.drawSize, res.special?.K, game?.syncKey],
   )
 
   // What is already saved for the draw this screen is about.

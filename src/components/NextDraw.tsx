@@ -3,7 +3,8 @@ import type { Draw, EngineResult } from '../engine/types.ts'
 import type { GameData } from '../engine/games.ts'
 import type { JackpotFeed } from '../engine/feed.ts'
 import { feedJackpotFor } from '../engine/feed.ts'
-import { US_LOWER_TIERS, projectNextJackpot, ticketValue } from '../engine/jackpot.ts'
+import { projectNextJackpot, ticketValue } from '../engine/jackpot.ts'
+import { meanMultiplier, priceLabel, pricingFor } from '../engine/pricing.ts'
 import { countdownTo, drawTimeLabel, nextDrawInstant } from '../engine/drawtime.ts'
 import { DOW_NAMES, formatDate } from '../engine/dates.ts'
 import { FlipClock } from './FlipClock.tsx'
@@ -92,10 +93,11 @@ export function NextDrawStrip({ res, game, draws, drawTime, feed, onSetJackpot, 
   // winner actually receives today, and it is what the value panel defaults to,
   // so the two never disagree on the same screen.
   const priced = info.cashValue ?? info.amount
+  const pricing = pricingFor(game?.syncKey)
   const perTicket = useMemo(() => {
     if (!priced) return null
-    return ticketValue(res.K, res.drawSize, res.special?.K ?? 0, priced, null, 2, US_LOWER_TIERS).grossEv
-  }, [priced, res.K, res.drawSize, res.special?.K])
+    return ticketValue(res.K, res.drawSize, res.special?.K ?? 0, priced, null, pricing.price, pricing.tiers, meanMultiplier(pricing)).grossEv
+  }, [priced, res.K, res.drawSize, res.special?.K, pricing])
 
   const save = () => {
     const cleaned = entry.replace(/[$,\s]/g, '')
@@ -148,7 +150,7 @@ export function NextDrawStrip({ res, game, draws, drawTime, feed, onSetJackpot, 
         <span className="nd-sub">
           {info.cashValue ? <>cash {shortMoney(info.cashValue)} · </> : null}
           {perTicket !== null && (
-            <>a $2 ticket is worth ${perTicket.toFixed(2)}{info.cashValue ? ' at the cash value' : ''}, before any split</>
+            <>a {priceLabel(pricing)} ticket is worth ${perTicket.toFixed(2)}{info.cashValue ? ' at the cash value' : ''}, before any split</>
           )}
         </span>
       </div>

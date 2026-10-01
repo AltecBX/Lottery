@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import type { Draw, EngineResult } from '../engine/types.ts'
-import { analyzeJackpots, ticketValue, US_LOWER_TIERS } from '../engine/jackpot.ts'
+import { analyzeJackpots, ticketValue } from '../engine/jackpot.ts'
+import { POWERBALL, meanMultiplier, priceLabel, type GamePricing } from '../engine/pricing.ts'
 import { formatDate } from '../engine/dates.ts'
 import { formatOdds } from '../engine/odds.ts'
 import { SectionCard, Tile, fmtPct } from './shared.tsx'
@@ -18,18 +19,19 @@ const money = (n: number): string => {
  * influence which balls come out — but they do decide what a win is worth and
  * how likely it is to be shared, which is real, checkable math.
  */
-export function JackpotPanel({ res, draws }: { res: EngineResult; draws: Draw[] }) {
+export function JackpotPanel({ res, draws, pricing = POWERBALL }: { res: EngineResult; draws: Draw[]; pricing?: GamePricing }) {
   const j = useMemo(() => analyzeJackpots(draws), [draws])
   const isUsStyle = res.drawSize === 5 && (res.special?.K ?? 0) > 0
 
   const value = useMemo(() => {
     if (!j.latest || !isUsStyle) return null
     // NY sales are a slice of national play; scale to a national ticket estimate.
-    // NY is roughly a twelfth of Powerball/Mega ticket sales.
-    const nyTickets = j.latestSales ? j.latestSales.amount / 2 : null
+    // NY is roughly a twelfth of Powerball/Mega ticket sales. Sales are dollars,
+    // so tickets are dollars over this game's own price.
+    const nyTickets = j.latestSales ? j.latestSales.amount / pricing.price : null
     const nationalTickets = nyTickets ? nyTickets * 12 : null
-    return ticketValue(res.K, res.drawSize, res.special!.K, j.latest.amount, nationalTickets, 2, US_LOWER_TIERS)
-  }, [j, res, isUsStyle])
+    return ticketValue(res.K, res.drawSize, res.special!.K, j.latest.amount, nationalTickets, pricing.price, pricing.tiers, meanMultiplier(pricing))
+  }, [j, res, isUsStyle, pricing])
 
   const series = useMemo(() => {
     const withJ = draws.filter((d) => d.jackpot !== undefined)
@@ -90,7 +92,7 @@ export function JackpotPanel({ res, draws }: { res: EngineResult; draws: Draw[] 
           <Tile
             label="NY ticket sales (latest draw)"
             value={money(j.latestSales.amount)}
-            delta={`≈ ${Math.round(j.latestSales.amount / 2).toLocaleString()} tickets in NY alone`}
+            delta={`≈ ${Math.round(j.latestSales.amount / pricing.price).toLocaleString()} tickets in NY alone`}
           />
         )}
         {j.winners.length > 0 && (
@@ -100,7 +102,7 @@ export function JackpotPanel({ res, draws }: { res: EngineResult; draws: Draw[] 
 
       {value && (
         <>
-          <div className="mini-title">What a $2 ticket is actually worth at this jackpot</div>
+          <div className="mini-title">What a {priceLabel(pricing)} ticket is actually worth at this jackpot</div>
           <div className="tbl-wrap">
             <table className="tbl">
               <tbody>
@@ -124,7 +126,7 @@ export function JackpotPanel({ res, draws }: { res: EngineResult; draws: Draw[] 
             </table>
           </div>
           <p className="hint" style={{ display: 'block', marginTop: 8 }}>
-            Expected value sums every prize tier times its probability. Even when it edges above the $2 ticket price at
+            Expected value sums every prize tier times its probability. Even when it edges above the {priceLabel(pricing)} ticket price at
             a huge jackpot, that figure ignores taxes and the annuity discount, and the outcome is still dominated by
             the {formatOdds(value.jackpotOdds)} jackpot chance — a positive EV here is a statistical curiosity, not a
             reason to buy more tickets.

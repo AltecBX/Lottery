@@ -11,6 +11,13 @@ export interface SavedTicket {
   cost?: number
   /** ISO timestamp the ticket was saved, for ordering the ledger. */
   savedAt?: string
+  /**
+   * The multiplier printed on the ticket, for games that put one on every
+   * ticket (Mega Millions since April 2025). It is assigned at the counter, so
+   * a ticket saved before buying cannot know it; until it is entered, any prize
+   * is counted at the smallest multiplier — what is provable, not what is likely.
+   */
+  multiplier?: number
 }
 
 /** One tracked game: its own history, settings, and (optionally) an official sync source. */
