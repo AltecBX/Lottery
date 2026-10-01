@@ -516,13 +516,15 @@ export function scorePortfolio(
  * excluded. Closed form, because these probabilities are known exactly and a
  * simulation would just add noise to a number that has none.
  */
-export function lowerTierValue(K: number, D: number, specialK: number, tiers: PrizeTier[] = US_LOWER_TIERS): number {
+export function lowerTierValue(
+  K: number, D: number, specialK: number, tiers: PrizeTier[] = US_LOWER_TIERS, prizeMultiplier = 1,
+): number {
   let ev = 0
   for (const t of tiers) {
     if (t.match > D) continue
     const pMains = 1 / matchOdds(K, D, t.match)
     const p = specialK > 0 ? pMains * (t.withSpecial ? 1 / specialK : 1 - 1 / specialK) : pMains
-    ev += p * t.prize
+    ev += p * t.prize * prizeMultiplier
   }
   return ev
 }

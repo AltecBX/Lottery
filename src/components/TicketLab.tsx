@@ -5,6 +5,7 @@ import { formatDate } from '../engine/dates.ts'
 import { formatOdds, jackpotOdds } from '../engine/odds.ts'
 import { positionalFit, type PositionalFit } from '../engine/positions.ts'
 import { buildLedger, type Ledger } from '../engine/ticket.ts'
+import { POWERBALL, maxMultiplier, minMultiplier, type GamePricing } from '../engine/pricing.ts'
 import { crowdMarkers, type CrowdMarker } from '../engine/crowd.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
 
@@ -16,18 +17,26 @@ const dollars = (n: number) => `${n < 0 ? '−' : ''}$${Math.abs(n).toLocaleStri
  * you. Tickets saved before dates were tracked have no draw attached, so they
  * are graded against the newest result and left out of the money totals.
  */
-function TicketLedger({ ledger, drawSize, onRemoveTicket }: {
+function TicketLedger({ ledger, drawSize, pricing, onRemoveTicket, onUpdateTicket }: {
   ledger: Ledger
   drawSize: number
+  pricing: GamePricing
   onRemoveTicket: (index: number) => void
+  onUpdateTicket?: (index: number, patch: Partial<SavedTicket>) => void
 }) {
+  // The table in words, read off the game's own figures rather than written in.
+  const tiers = [...pricing.tiers].sort((a, b) => b.prize - a.prize)
+  const fmtTier = (t: { match: number; withSpecial: boolean }) =>
+    t.match === 0 ? 'the bonus ball alone' : `${t.match}${t.withSpecial ? ' + bonus' : ` of ${drawSize}`}`
+  const mult = pricing.multiplier
+  const times = mult ? ' × the ticket\'s multiplier' : ''
   return (
     <div style={{ marginTop: 18 }}>
       <div className="mini-title">My tickets</div>
       {ledger.settled + ledger.pending > 0 && (
         <div className="ledger-totals">
           <span><b>{dollars(ledger.spent)}</b> spent</span>
-          <span><b>{dollars(ledger.won)}</b> won</span>
+          <span>{ledger.floors > 0 && 'at least '}<b>{dollars(ledger.won)}</b> won</span>
           <span className={ledger.net >= 0 ? 'good' : 'bad'}><b>{dollars(ledger.net)}</b> net</span>
           <span className="meta">
             {ledger.settled} settled{ledger.pending > 0 ? ` · ${ledger.pending} waiting on a draw` : ''}
@@ -55,7 +64,23 @@ function TicketLedger({ ledger, drawSize, onRemoveTicket }: {
                   <>{formatDate(row.draw!.date)} · {g!.label}</>
                 )}
               </span>
-              {g && g.prize > 0 && <span className="ledger-prize">{dollars(g.prize)}</span>}
+              {g && g.prize > 0 && (
+                <span className="ledger-prize" title={g.prizeIsFloor ? `${dollars(g.prize)} to ${dollars(g.prizeMax ?? g.prize)} depending on the multiplier printed on the ticket` : undefined}>
+                  {g.prizeIsFloor ? <>at least {dollars(g.prize)}</> : dollars(g.prize)}
+                </span>
+              )}
+              {/* Only a winner's multiplier changes anything, so only winners ask for it. */}
+              {mult && onUpdateTicket && row.status === 'settled' && g && g.prize > 0 && !g.jackpot && (
+                <select
+                  className="ledger-mult"
+                  value={row.ticket.multiplier ?? ''}
+                  aria-label="Multiplier printed on this ticket"
+                  onChange={(e) => onUpdateTicket(row.index, { multiplier: e.target.value ? Number(e.target.value) : undefined })}
+                >
+                  <option value="">× ?</option>
+                  {mult.map((m) => <option key={m.value} value={m.value}>×{m.value}</option>)}
+                </select>
+              )}
               <button className="btn ghost sm danger" title="Remove ticket" onClick={() => onRemoveTicket(row.index)}>✕</button>
             </div>
           )
@@ -63,7 +88,16 @@ function TicketLedger({ ledger, drawSize, onRemoveTicket }: {
       </div>
       <p className="hint" style={{ display: 'block', marginTop: 8 }}>
         Tickets settle themselves the moment their draw syncs in, priced with the game's published prize table
-        (5 of {drawSize} pays $1,000,000, 4 + bonus $50,000, and so on down to $4).
+        at {dollars(pricing.price)} a play ({fmtTier(tiers[0])} pays {dollars(tiers[0].prize)}{times},{' '}
+        {fmtTier(tiers[1])} {dollars(tiers[1].prize)}, and so on down to {dollars(tiers[tiers.length - 1].prize)}).
+        {mult && (
+          <>
+            {' '}Every ticket carries its own multiplier, from ×{minMultiplier(pricing)} to ×{maxMultiplier(pricing)},
+            printed at the counter — so a saved ticket cannot know it. Until you pick the one on your ticket, a win is
+            counted at ×{minMultiplier(pricing)}, the least it can be worth.
+            {ledger.floors > 0 && <> {ledger.floors} winning ticket{ledger.floors === 1 ? ' is' : 's are'} counted that way now.</>}
+          </>
+        )}
       </p>
     </div>
   )
@@ -87,12 +121,14 @@ interface Evaluation {
 }
 
 /** Score any ticket against the model and the full history. */
-export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTicket }: {
+export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTicket, onUpdateTicket, pricing = POWERBALL }: {
   res: EngineResult
   draws: Draw[]
   savedTickets: SavedTicket[]
   onSaveTicket: (t: SavedTicket) => void
   onRemoveTicket: (index: number) => void
+  onUpdateTicket?: (index: number, patch: Partial<SavedTicket>) => void
+  pricing?: GamePricing
 }) {
   const D = res.drawSize
   const hasSpecial = res.special !== null
@@ -103,7 +139,7 @@ export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTick
   const [evalResult, setEvalResult] = useState<Evaluation | null>(null)
 
   const rankOf = useMemo(() => new Map(res.predictions.map((p) => [p.number, p])), [res.predictions])
-  const ledger = useMemo(() => buildLedger(savedTickets, draws, D), [savedTickets, draws, D])
+  const ledger = useMemo(() => buildLedger(savedTickets, draws, D, pricing), [savedTickets, draws, D, pricing])
   const pastKeys = useMemo(() => new Set(draws.map((d) => d.sorted.join('-'))), [draws])
 
   const parseInputs = (): SavedTicket | null => {
@@ -345,7 +381,7 @@ export function TicketLab({ res, draws, savedTickets, onSaveTicket, onRemoveTick
         </div>
       )}
 
-      {savedTickets.length > 0 && <TicketLedger ledger={ledger} drawSize={D} onRemoveTicket={onRemoveTicket} />}
+      {savedTickets.length > 0 && <TicketLedger ledger={ledger} drawSize={D} pricing={pricing} onRemoveTicket={onRemoveTicket} onUpdateTicket={onUpdateTicket} />}
     </SectionCard>
   )
 }

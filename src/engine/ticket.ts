@@ -1,6 +1,6 @@
 import type { Draw } from './types.ts'
 import type { SavedTicket } from './games.ts'
-import { US_LOWER_TIERS } from './jackpot.ts'
+import { POWERBALL, maxMultiplier, minMultiplier, type GamePricing } from './pricing.ts'
 
 export interface PrizeTier {
   match: number
@@ -18,6 +18,15 @@ export interface TicketGrade {
   jackpot: boolean
   /** "4 + bonus", "3", "no match" */
   label: string
+  /** The ticket's own multiplier, when the game has one and it was recorded */
+  multiplier?: number
+  /**
+   * True when the game multiplies every prize and this ticket's multiplier is
+   * not recorded: `prize` is then the smallest it can be, and `prizeMax` the
+   * most the same match pays.
+   */
+  prizeIsFloor?: boolean
+  prizeMax?: number
 }
 
 const tierLabel = (mains: number, specialHit: boolean, drawSize: number): string => {
@@ -29,16 +38,15 @@ const tierLabel = (mains: number, specialHit: boolean, drawSize: number): string
 }
 
 /**
- * Score a ticket against a draw using the game's published prize table.
- * `tiers` defaults to the US $2 structure shared by Powerball and Mega
- * Millions; games without a bonus ball simply score no lower tiers, so the
- * grade still reports how many numbers matched.
+ * Score a ticket against a draw using the game's published prize table —
+ * Powerball's unless told otherwise. Games without a bonus ball simply score no
+ * lower tiers, so the grade still reports how many numbers matched.
  */
 export function gradeTicket(
   ticket: SavedTicket,
   draw: Draw,
   drawSize: number,
-  tiers: PrizeTier[] = US_LOWER_TIERS,
+  pricing: GamePricing = POWERBALL,
 ): TicketGrade {
   const drawn = new Set(draw.sorted)
   let mains = 0
@@ -57,12 +65,27 @@ export function gradeTicket(
       label: hasSpecial ? `${drawSize} + bonus — jackpot` : `${drawSize} of ${drawSize} — jackpot`,
     }
   }
-  const tier = tiers.find((t) => t.match === mains && t.withSpecial === specialHit)
-  return {
-    mains, specialHit, jackpot: false,
-    prize: tier?.prize ?? 0,
-    label: tierLabel(mains, specialHit, drawSize),
+  const tier = pricing.tiers.find((t) => t.match === mains && t.withSpecial === specialHit)
+  const base = tier?.prize ?? 0
+  const grade: TicketGrade = { mains, specialHit, jackpot: false, prize: base, label: tierLabel(mains, specialHit, drawSize) }
+  if (base === 0 || !pricing.multiplier) return grade
+  /*
+   * Every prize below the jackpot is multiplied, and the multiplier is the
+   * ticket's own — printed at the counter, invisible to a ticket saved before
+   * buying. Recorded, the prize is exact. Unrecorded, it is the floor: the
+   * same rule this function already applies to a ticket saved without its
+   * bonus ball, counting what is provable rather than what is likely.
+   */
+  const own = ticket.multiplier
+  if (own !== undefined && pricing.multiplier.some((m) => m.value === own)) {
+    grade.prize = base * own
+    grade.multiplier = own
+    return grade
   }
+  grade.prize = base * minMultiplier(pricing)
+  grade.prizeMax = base * maxMultiplier(pricing)
+  grade.prizeIsFloor = true
+  return grade
 }
 
 export interface LedgerRow {
@@ -85,6 +108,8 @@ export interface Ledger {
   pending: number
   /** Best result across every settled ticket */
   best: { row: LedgerRow; grade: TicketGrade } | null
+  /** Settled winners counted at their floor because their multiplier is not recorded */
+  floors: number
 }
 
 /**
@@ -99,9 +124,9 @@ export function buildLedger(
   tickets: SavedTicket[],
   draws: Draw[],
   drawSize: number,
-  ticketPrice = 2,
-  tiers: PrizeTier[] = US_LOWER_TIERS,
+  pricing: GamePricing = POWERBALL,
 ): Ledger {
+  const ticketPrice = pricing.price
   const byDate = new Map<string, Draw>()
   for (const d of draws) byDate.set(d.date, d)
   const latest = draws.length > 0 ? draws[draws.length - 1] : null
@@ -112,12 +137,12 @@ export function buildLedger(
       return {
         ticket, index, cost, status: 'open' as const,
         draw: latest,
-        grade: latest ? gradeTicket(ticket, latest, drawSize, tiers) : null,
+        grade: latest ? gradeTicket(ticket, latest, drawSize, pricing) : null,
       }
     }
     const draw = byDate.get(ticket.forDate) ?? null
     if (!draw) return { ticket, index, cost, status: 'pending' as const, draw: null, grade: null }
-    return { ticket, index, cost, status: 'settled' as const, draw, grade: gradeTicket(ticket, draw, drawSize, tiers) }
+    return { ticket, index, cost, status: 'settled' as const, draw, grade: gradeTicket(ticket, draw, drawSize, pricing) }
   })
 
   let spent = 0
@@ -125,16 +150,18 @@ export function buildLedger(
   let settled = 0
   let pending = 0
   let best: Ledger['best'] = null
+  let floors = 0
   for (const row of rows) {
     if (row.status === 'open') continue
     spent += row.cost
     if (row.status === 'pending') { pending++; continue }
     settled++
     won += row.grade?.prize ?? 0
+    if (row.grade?.prizeIsFloor) floors++
     const g = row.grade
     if (g && (!best || g.mains + (g.specialHit ? 0.5 : 0) > best.grade.mains + (best.grade.specialHit ? 0.5 : 0))) {
       best = { row, grade: g }
     }
   }
-  return { rows, spent, won, net: won - spent, settled, pending, best }
+  return { rows, spent, won, net: won - spent, settled, pending, best, floors }
 }

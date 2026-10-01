@@ -2,7 +2,8 @@ import { useMemo, useState } from 'react'
 import type { Draw, EngineResult } from '../engine/types.ts'
 import type { GameData } from '../engine/games.ts'
 import type { JackpotFeed } from '../engine/feed.ts'
-import { US_LOWER_TIERS, ticketValue } from '../engine/jackpot.ts'
+import { ticketValue } from '../engine/jackpot.ts'
+import { meanMultiplier, priceLabel, pricingFor } from '../engine/pricing.ts'
 import { formatOdds } from '../engine/odds.ts'
 import { resolveNextDraw, bigMoney } from './NextDraw.tsx'
 import { SectionCard, Tile, fmtPct } from './shared.tsx'
@@ -21,7 +22,7 @@ function typicalSales(draws: Draw[]): number | null {
  * What a ticket is actually worth at tonight's prize.
  *
  * Jackpots are the one part of a lottery that genuinely changes the maths: the
- * odds never move, but the payout does, so the expected value of the same $2
+ * odds never move, but the payout does, so the expected value of the same
  * ticket swings by a factor of ten across a roll. This panel puts a number on
  * it — including the part most coverage leaves out, which is that a big prize
  * draws a crowd and a crowd means splitting it.
@@ -44,12 +45,18 @@ export function ValuePanel({ res, game, draws, feed, drawTime }: {
   const [useAnnuity, setUseAnnuity] = useState(false)
 
   const prize = !useAnnuity && info.cashValue ? info.cashValue : info.amount
-  const ticketsSold = observed !== null ? Math.round((observed * multiple) / 2) : null
+  const pricing = pricingFor(game?.syncKey)
+  const price = pricing.price
+  const tag = priceLabel(pricing)
+  // Sales are dollars, so the ticket count is dollars over this game's price —
+  // dividing Mega Millions' $5 plays by 2 counted 2.5 times the tickets and
+  // overstated the chance of sharing by the same factor.
+  const ticketsSold = observed !== null ? Math.round((observed * multiple) / price) : null
 
   const value = useMemo(() => {
     if (!prize) return null
-    return ticketValue(res.K, res.drawSize, res.special?.K ?? 0, prize, ticketsSold, 2, US_LOWER_TIERS)
-  }, [prize, ticketsSold, res.K, res.drawSize, res.special?.K])
+    return ticketValue(res.K, res.drawSize, res.special?.K ?? 0, prize, ticketsSold, pricing.price, pricing.tiers, meanMultiplier(pricing))
+  }, [prize, ticketsSold, res.K, res.drawSize, res.special?.K, pricing])
 
   if (!value || !prize) {
     return (
@@ -67,19 +74,19 @@ export function ValuePanel({ res, game, draws, feed, drawTime }: {
     )
   }
 
-  const net = value.adjustedEv - 2
-  const breakEven = value.grossEv > 0 ? (2 - (value.grossEv - (1 / value.jackpotOdds) * prize)) * value.jackpotOdds : 0
+  const net = value.adjustedEv - price
+  const breakEven = value.grossEv > 0 ? (price - (value.grossEv - (1 / value.jackpotOdds) * prize)) * value.jackpotOdds : 0
 
   return (
     <SectionCard
       id="value"
       title="Is it worth it"
       className="half"
-      sub={`What a $2 ticket returns on average at ${bigMoney(prize)}${useAnnuity ? ' advertised' : ' cash'} — the odds never move, but the payout does.`}
+      sub={`What a ${tag} ticket returns on average at ${bigMoney(prize)}${useAnnuity ? ' advertised' : ' cash'} — the odds never move, but the payout does.`}
     >
       <div className="tiles">
         <Tile
-          label="Value of a $2 ticket"
+          label={`Value of a ${tag} ticket`}
           value={money(value.adjustedEv)}
           delta={
             ticketsSold === null ? `${net >= 0 ? money(net) : money(-net)} ${net >= 0 ? 'above' : 'short of'} its price — split risk not counted`
@@ -129,17 +136,23 @@ export function ValuePanel({ res, game, draws, feed, drawTime }: {
               + ' split with, and a prize this size is exactly when splitting becomes likely'}. It still does not make
             the ticket likely to win: {formatOdds(value.jackpotOdds)} is {formatOdds(value.jackpotOdds)} whatever the
             payout is. The positive average comes from a huge prize on a tiny probability, so the median outcome is
-            unchanged — you lose $2. Tax takes roughly a quarter to a third of anything above it.
+            unchanged — you lose {tag}. Tax takes roughly a quarter to a third of anything above it.
           </>
         ) : (
           <>
-            The average $2 ticket comes back as {money(value.adjustedEv)} at this prize. It would take about{' '}
+            The average {tag} ticket comes back as {money(value.adjustedEv)} at this prize. It would take about{' '}
             {breakEven > 0 && Number.isFinite(breakEven) ? bigMoney(breakEven) : 'an unreachable jackpot'} for the
             average to reach the ticket price, before tax — and sharing the prize pushes that higher still.
           </>
         )}
         {observed === null && ' No ticket-sales data has synced for this game yet, so the split estimate is unavailable;'
           + ' sync the official results to fill it in.'}
+        {pricing.multiplier && (
+          <>
+            {' '}Every prize below the jackpot is counted at its multiplier's average of {meanMultiplier(pricing).toFixed(0)}× —
+            each ticket is printed with one, from 2× to 10×, and the jackpot itself is never multiplied.
+          </>
+        )}
       </p>
     </SectionCard>
   )

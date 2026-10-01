@@ -1020,6 +1020,13 @@ dialog::backdrop { background: rgba(4, 8, 18, 0.55); backdrop-filter: blur(5px);
   font-variant-numeric: tabular-nums; font-size: 13.5px;
 }
 .saved-ticket.won { border-color: color-mix(in srgb, var(--good-text) 45%, transparent); background: color-mix(in srgb, var(--good-text) 8%, transparent); }
+/* The multiplier printed on a winning ticket. 44px tall like every other
+   control on a phone; only winners carry one, so it never crowds a plain row. */
+.ledger-mult {
+  min-height: 44px; padding: 0 10px; border-radius: 10px;
+  border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--ink);
+  font: inherit; font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums;
+}
 .saved-ticket .meta { margin-left: auto; }
 
 /* ---------- Portfolio ---------- */

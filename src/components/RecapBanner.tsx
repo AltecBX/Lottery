@@ -3,6 +3,7 @@ import type { Draw, EngineResult } from '../engine/types.ts'
 import type { SavedTicket } from '../engine/games.ts'
 import { DOW_NAMES, formatDate } from '../engine/dates.ts'
 import { gradeTicket } from '../engine/ticket.ts'
+import { POWERBALL, type GamePricing } from '../engine/pricing.ts'
 import { Ball } from './shared.tsx'
 
 const seenKey = (gameId: string) => `patternlab.seen.${gameId}`
@@ -29,11 +30,12 @@ const writeSeen = (gameId: string, date: string) => {
  * result that has landed since the last visit, scored two ways that matter:
  * how the model's ranking did, and whether anything you saved actually won.
  */
-export function RecapBanner({ res, draws, gameId, savedTickets }: {
+export function RecapBanner({ res, draws, gameId, savedTickets, pricing = POWERBALL }: {
   res: EngineResult
   draws: Draw[]
   gameId: string
   savedTickets: SavedTicket[]
+  pricing?: GamePricing
 }) {
   const latest = draws.length > 0 ? draws[draws.length - 1].date : ''
   const [since, setSince] = useState<string | null>(() => (gameId ? readSeen(gameId) : null))
@@ -61,12 +63,12 @@ export function RecapBanner({ res, draws, gameId, savedTickets }: {
       const point = byDate.get(draw.date) ?? null
       const wins = savedTickets
         .filter((t) => !t.forDate || t.forDate === draw.date)
-        .map((t) => gradeTicket(t, draw, res.drawSize))
+        .map((t) => gradeTicket(t, draw, res.drawSize, pricing))
         .filter((g) => g.prize > 0 || g.mains >= 2)
         .sort((a, b) => b.prize - a.prize || b.mains - a.mains)
       return { draw, point, wins }
     })
-  }, [fresh, res.backtest.points, res.drawSize, savedTickets])
+  }, [fresh, res.backtest.points, res.drawSize, savedTickets, pricing])
 
   if (dismissed || rows.length === 0) return null
 
@@ -77,6 +79,9 @@ export function RecapBanner({ res, draws, gameId, savedTickets }: {
   }
 
   const won = rows.reduce((s, r) => s + r.wins.reduce((a, g) => a + g.prize, 0), 0)
+  // A Mega Millions win with its multiplier not yet recorded is counted at the
+  // floor, and the banner says so rather than reporting the floor as the sum.
+  const atLeast = rows.some((r) => r.wins.some((g) => g.prize > 0 && g.prizeIsFloor))
 
   return (
     <div className="recap">
@@ -84,7 +89,7 @@ export function RecapBanner({ res, draws, gameId, savedTickets }: {
         <span className="recap-title">
           {rows.length === 1 ? 'A draw landed' : `${rows.length} draws landed`} since you were last here
         </span>
-        {won > 0 && <span className="recap-won">you won ${won.toLocaleString()}</span>}
+        {won > 0 && <span className="recap-won">you won {atLeast ? 'at least ' : ''}${won.toLocaleString()}</span>}
         <button className="btn ghost sm" onClick={acknowledge} aria-label="Dismiss recap">✕</button>
       </div>
 
@@ -111,7 +116,7 @@ export function RecapBanner({ res, draws, gameId, savedTickets }: {
                 {' · '}
                 <strong className={wins[0].prize > 0 ? 'recap-hit' : undefined}>
                   your ticket: {wins[0].label}
-                  {wins[0].prize > 0 ? ` — $${wins[0].prize.toLocaleString()}` : ''}
+                  {wins[0].prize > 0 ? ` — ${wins[0].prizeIsFloor ? 'at least ' : ''}$${wins[0].prize.toLocaleString()}` : ''}
                 </strong>
               </>
             )}

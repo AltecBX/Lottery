@@ -21,6 +21,8 @@ import { flipUnits } from '../components/FlipClock.tsx'
 import { resolveNextDraw } from '../components/NextDraw.tsx'
 import { boardCells } from '../components/PredictionBoard.tsx'
 import { missedDraws, missingResults } from '../engine/play.ts'
+import { MEGA_MILLIONS_2025, POWERBALL, maxMultiplier, meanMultiplier, minMultiplier, pricingFor } from '../engine/pricing.ts'
+import { ticketValue, US_LOWER_TIERS } from '../engine/jackpot.ts'
 import { decodeHistory, encodeHistory, fillFromPrior, historyUrl } from '../engine/history.ts'
 import { dowOf } from '../engine/dates.ts'
 import { countdownTo } from '../engine/drawtime.ts'
@@ -749,5 +751,120 @@ describe('results this device is missing', () => {
     expect(missingResults('2026-10-02', tueFri, at('2026-10-04'))).toBe(1)
     // The October 2026 state: every draw since 4 August
     expect(missingResults('2026-08-04', tueFri, at('2026-10-01'))).toBe(17)
+  })
+})
+
+describe('pricing each game by its own rules', () => {
+  /*
+   * Every game used to be priced as a $2 ticket on Powerball's prize table.
+   * Mega Millions has cost $5 since April 2025, pays from its own table, and
+   * prints a multiplier on every ticket — so its value line, value and jackpot
+   * panels, and every saved Mega Millions ticket were priced as another game.
+   */
+  const official = JSON.parse(JSON.parse(megaMillionsPayload).d).PrizeMatrix as {
+    TicketPrice: number; WhiteBallMax: number; MegaBallMax: number
+    PrizeTiers: { TierWhiteBall: number; TierMegaBall: boolean; IsJackpot: boolean; Mega2: number; Mega3: number; Mega4: number; Mega5: number; Mega10: number; Odds: number }[]
+  }
+
+  it('charges each game its real price', () => {
+    expect(pricingFor('megamillions').price).toBe(5)
+    expect(pricingFor('megamillions').price).toBe(official.TicketPrice)
+    expect(pricingFor('powerball')).toBe(POWERBALL)
+    expect(POWERBALL.price).toBe(2)
+    expect(POWERBALL.tiers).toBe(US_LOWER_TIERS)
+    // A game without an official source keeps the structure it always had
+    expect(pricingFor(undefined)).toBe(POWERBALL)
+  })
+
+  it('pays Mega Millions exactly what the official prize matrix pays, at every multiplier', () => {
+    // The multiplied columns are what is actually paid. The matrix's own base
+    // column is stale for three tiers, so it is deliberately not compared.
+    const tiers = official.PrizeTiers.filter((t) => !t.IsJackpot)
+    expect(tiers).toHaveLength(MEGA_MILLIONS_2025.tiers.length)
+    for (const t of tiers) {
+      const ours = MEGA_MILLIONS_2025.tiers.find((x) => x.match === t.TierWhiteBall && x.withSpecial === t.TierMegaBall)!
+      expect(ours, `${t.TierWhiteBall}${t.TierMegaBall ? '+MB' : ''}`).toBeDefined()
+      for (const k of [2, 3, 4, 5, 10] as const) {
+        expect(ours.prize * k).toBe(t[`Mega${k}` as const])
+      }
+    }
+  })
+
+  it('agrees with the official odds for every tier', () => {
+    const K = official.WhiteBallMax, sk = official.MegaBallMax
+    for (const t of official.PrizeTiers) {
+      const pMains = 1 / matchOdds(K, 5, t.TierWhiteBall)
+      const p = pMains * (t.TierMegaBall ? 1 / sk : 1 - 1 / sk)
+      // The published figures are rounded to whole numbers
+      expect(Math.abs(1 / p - t.Odds) / t.Odds).toBeLessThan(0.005)
+    }
+  })
+
+  it('weights the multiplier exactly as published: 2x 1 in 2.13, 3x 1 in 3.2, 4x 1 in 8, 5x 1 in 16, 10x 1 in 32', () => {
+    const m = MEGA_MILLIONS_2025.multiplier!
+    const total = m.reduce((a, b) => a + b.weight, 0)
+    const oneIn = Object.fromEntries(m.map((x) => [x.value, total / x.weight]))
+    expect(oneIn[2]).toBeCloseTo(2.13, 2)
+    expect(oneIn[3]).toBeCloseTo(3.2, 6)
+    expect(oneIn[4]).toBe(8)
+    expect(oneIn[5]).toBe(16)
+    expect(oneIn[10]).toBe(32)
+    expect(meanMultiplier(MEGA_MILLIONS_2025)).toBe(3)
+    expect(minMultiplier(MEGA_MILLIONS_2025)).toBe(2)
+    expect(maxMultiplier(MEGA_MILLIONS_2025)).toBe(10)
+    expect(meanMultiplier(POWERBALL)).toBe(1)
+  })
+
+  it('values a $5 Mega Millions ticket with its multiplier counted, and leaves Powerball alone', () => {
+    const mm = MEGA_MILLIONS_2025
+    const base = lowerTierValue(70, 5, 24, mm.tiers)
+    const withMult = lowerTierValue(70, 5, 24, mm.tiers, meanMultiplier(mm))
+    expect(withMult).toBeCloseTo(base * 3, 12)
+    // About $1.12 back per $5 ticket below the jackpot
+    expect(withMult).toBeGreaterThan(1.1)
+    expect(withMult).toBeLessThan(1.14)
+    // The jackpot is never multiplied: at a $300M cash prize it adds prize / odds on top
+    const v = ticketValue(70, 5, 24, 300e6, null, mm.price, mm.tiers, meanMultiplier(mm))
+    expect(v.ticketPrice).toBe(5)
+    expect(v.grossEv).toBeCloseTo(withMult + 300e6 / 290_472_336, 9)
+    // Powerball is exactly what it was
+    expect(lowerTierValue(69, 5, 26)).toBeCloseTo(lowerTierValue(69, 5, 26, POWERBALL.tiers, meanMultiplier(POWERBALL)), 12)
+  })
+
+  it('grades a Mega Millions win at its own multiplier, or at the floor until it is entered', () => {
+    const draw = D('2026-09-29', [10, 15, 16, 27, 64], 23, 300e6)
+    const ticket = { numbers: [1, 2, 3, 4, 5], special: 23 } // bonus ball only
+    const unknown = gradeTicket(ticket, draw, 5, MEGA_MILLIONS_2025)
+    expect(unknown).toMatchObject({ prize: 10, prizeIsFloor: true, prizeMax: 50 })
+    expect(gradeTicket({ ...ticket, multiplier: 3 }, draw, 5, MEGA_MILLIONS_2025)).toMatchObject({ prize: 15, multiplier: 3 })
+    expect(gradeTicket({ ...ticket, multiplier: 10 }, draw, 5, MEGA_MILLIONS_2025).prize).toBe(50)
+    // A multiplier the game does not print is ignored, not trusted
+    expect(gradeTicket({ ...ticket, multiplier: 7 }, draw, 5, MEGA_MILLIONS_2025)).toMatchObject({ prize: 10, prizeIsFloor: true })
+    // 1 + Mega Ball: $7 base, so $14 to $70
+    expect(gradeTicket({ numbers: [10, 2, 3, 4, 5], special: 23 }, draw, 5, MEGA_MILLIONS_2025)).toMatchObject({ prize: 14, prizeMax: 70 })
+    // The jackpot is the jackpot — never multiplied, never a floor
+    const jp = gradeTicket({ numbers: [10, 15, 16, 27, 64], special: 23, multiplier: 10 }, draw, 5, MEGA_MILLIONS_2025)
+    expect(jp).toMatchObject({ jackpot: true, prize: 300e6 })
+    expect(jp.prizeIsFloor).toBeUndefined()
+    // A loser is a loser whatever its multiplier
+    expect(gradeTicket({ numbers: [1, 2, 3, 4, 5], special: 1, multiplier: 10 }, draw, 5, MEGA_MILLIONS_2025).prize).toBe(0)
+  })
+
+  it('charges $5 a Mega Millions ticket in the ledger and says when a win is only a floor', () => {
+    const draw = D('2026-09-29', [10, 15, 16, 27, 64], 23, 300e6)
+    const tickets = [
+      { numbers: [1, 2, 3, 4, 5], special: 23, forDate: '2026-09-29' },               // MB only, multiplier unknown
+      { numbers: [10, 15, 16, 4, 5], special: 23, forDate: '2026-09-29', multiplier: 4 }, // 3 + MB at ×4 = $800
+      { numbers: [1, 2, 3, 4, 5], special: 1, forDate: '2026-09-29' },                 // nothing
+      { numbers: [1, 2, 3, 4, 6], special: 1, forDate: '2026-10-02' },                 // not drawn yet
+    ]
+    const l = buildLedger(tickets, [draw], 5, MEGA_MILLIONS_2025)
+    expect(l.spent).toBe(20)
+    expect(l.won).toBe(10 + 800)
+    expect(l.floors).toBe(1)
+    expect(l.pending).toBe(1)
+    // and Powerball's ledger is untouched: $2 a ticket, no floors
+    const pb = buildLedger([{ numbers: [1, 2, 3, 4, 5], special: 23, forDate: '2026-09-29' }], [draw], 5)
+    expect(pb).toMatchObject({ spent: 2, won: 4, floors: 0 })
   })
 })

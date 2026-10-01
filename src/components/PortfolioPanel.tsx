@@ -5,6 +5,7 @@ import { buildPortfolio, lowerTierValue, type PortfolioStats } from '../engine/p
 import { reducedPoolAcceptor } from '../engine/constraintlab.ts'
 import { uncrowded } from '../engine/crowd.ts'
 import { seedFor } from '../engine/play.ts'
+import { POWERBALL, meanMultiplier, type GamePricing } from '../engine/pricing.ts'
 import { formatOdds, jackpotOdds } from '../engine/odds.ts'
 import { SectionCard, Ball, fmtPct } from './shared.tsx'
 
@@ -51,10 +52,11 @@ function CompareRow({ label, stats, best, note }: {
  * chance that *something* on the counter pays is materially different, and the
  * simulation below measures it against fair random draws.
  */
-export function PortfolioPanel({ res, draws, onSaveTicket }: {
+export function PortfolioPanel({ res, draws, onSaveTicket, pricing = POWERBALL }: {
   res: EngineResult
   draws: Draw[]
   onSaveTicket: (t: SavedTicket) => void
+  pricing?: GamePricing
 }) {
   const [count, setCount] = useState(5)
   const [spread, setSpread] = useState(0.65)
@@ -122,12 +124,13 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
       accept,
       seed: seedFor(res.nextDate),
       trials: 60000,
+      tiers: pricing.tiers,
     }),
-    [scores, res.K, res.drawSize, res.special?.K, specialPicks, count, spread, shape, pastWinners, accept, res.nextDate],
+    [scores, res.K, res.drawSize, res.special?.K, specialPicks, count, spread, shape, pastWinners, accept, res.nextDate, pricing],
   )
 
   const { stats, quickPick, concentrated } = portfolio
-  const spent = count * 2
+  const spent = count * pricing.price
   const bestAny = Math.max(stats.pAnyPrize, quickPick.pAnyPrize, concentrated.pAnyPrize)
   const rows = [
     { label: 'This set', stats, note: "model's numbers, spread across tickets" },
@@ -140,8 +143,8 @@ export function PortfolioPanel({ res, draws, onSaveTicket }: {
     [res.K, res.drawSize, res.special?.K],
   )
   const lowerEv = useMemo(
-    () => lowerTierValue(res.K, res.drawSize, res.special?.K ?? 0),
-    [res.K, res.drawSize, res.special?.K],
+    () => lowerTierValue(res.K, res.drawSize, res.special?.K ?? 0, pricing.tiers, meanMultiplier(pricing)),
+    [res.K, res.drawSize, res.special?.K, pricing],
   )
 
   const save = (i: number) => {

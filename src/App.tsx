@@ -40,6 +40,7 @@ import { RecapBanner } from './components/RecapBanner.tsx'
 import { PlayView } from './components/PlayView.tsx'
 import { PredictionBoard } from './components/PredictionBoard.tsx'
 import { missingResults } from './engine/play.ts'
+import { pricingFor } from './engine/pricing.ts'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 import { AddGameDialog } from './components/AddGameDialog.tsx'
 import { BrandLockup, JerryLockup } from './components/Logo.tsx'
@@ -356,6 +357,28 @@ export default function App() {
     say('Ticket saved — it will be checked against every new draw.')
   }, [setGamesState])
 
+  // Record what the counter printed on a saved ticket — its multiplier, for now.
+  const updateTicket = useCallback((index: number, patch: Partial<SavedTicket>) => {
+    setGamesState((s) => {
+      const active = s.games.find((x) => x.id === s.activeId) ?? s.games[0]
+      if (!active) return s
+      return {
+        ...s,
+        games: s.games.map((g) => (g.id === active.id
+          ? {
+              ...g,
+              savedTickets: (g.savedTickets ?? []).map((t, i) => {
+                if (i !== index) return t
+                const next: SavedTicket = { ...t, ...patch }
+                if (next.multiplier === undefined) delete next.multiplier
+                return next
+              }),
+            }
+          : g)),
+      }
+    })
+  }, [setGamesState])
+
   const removeTicket = useCallback((index: number) => {
     setGamesState((s) => {
       const active = s.games.find((x) => x.id === s.activeId) ?? s.games[0]
@@ -423,6 +446,7 @@ export default function App() {
     () => (result?.ok && activeGame?.syncKey ? missingResults(result.nextDate, result.scheduleDows) : 0),
     [result?.ok, result?.nextDate, result?.scheduleDows, activeGame?.syncKey],
   )
+  const pricing = useMemo(() => pricingFor(activeGame?.syncKey), [activeGame?.syncKey])
   const showStaleNudge = !!activeGame?.syncKey && hasData && (staleDays > 4 || missingDraws > 0)
   const staleNudge = (lead: string) => (
     <div className="notice era-banner">
@@ -659,6 +683,7 @@ export default function App() {
                 draws={draws}
                 gameId={activeGame?.id ?? ''}
                 savedTickets={activeGame?.savedTickets ?? EMPTY_TICKETS}
+                pricing={pricing}
               />
               <PlayView
                 key={`play-${activeGame?.id}-${result.lastDate}`}
@@ -689,6 +714,7 @@ export default function App() {
                 draws={draws}
                 gameId={activeGame?.id ?? ''}
                 savedTickets={activeGame?.savedTickets ?? EMPTY_TICKETS}
+                pricing={pricing}
               />
               <PredictionPanel
                 res={result}
@@ -705,6 +731,7 @@ export default function App() {
                 res={result}
                 draws={draws}
                 onSaveTicket={saveTicket}
+                pricing={pricing}
               />
               <ConstraintLabPanel res={result} draws={draws} />
               <RealityPanel res={result} />
@@ -712,7 +739,7 @@ export default function App() {
               <PredictionLog res={result} />
               <PositionsPanel res={result} />
               <RepeatsPanel res={result} />
-              <JackpotPanel res={result} draws={draws} />
+              <JackpotPanel res={result} draws={draws} pricing={pricing} />
               <TicketLab
                 key={`t-${activeGame?.id}-${result.lastDate}-${result.drawCount}`}
                 res={result}
@@ -720,6 +747,8 @@ export default function App() {
                 savedTickets={activeGame?.savedTickets ?? EMPTY_TICKETS}
                 onSaveTicket={saveTicket}
                 onRemoveTicket={removeTicket}
+                onUpdateTicket={updateTicket}
+                pricing={pricing}
               />
               <InspectorPanel key={`i-${activeGame?.id}`} res={result} draws={draws} />
               <HotColdOverdue res={result} />
