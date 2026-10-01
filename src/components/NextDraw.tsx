@@ -58,13 +58,15 @@ export function resolveNextDraw(
  * when the published feed has one for this exact draw, the amount typed in when
  * there is one, and otherwise a projection from this history's own roll-up.
  */
-export function NextDrawStrip({ res, game, draws, drawTime, feed, onSetJackpot }: {
+export function NextDrawStrip({ res, game, draws, drawTime, feed, onSetJackpot, behind = 0 }: {
   res: EngineResult
   game: GameData | undefined
   draws: Draw[]
   drawTime: string
   feed: JackpotFeed | null
   onSetJackpot: (amount: number | null, forDate: string) => void
+  /** Scheduled draws missing from the history; the "next" draw is then already over */
+  behind?: number
 }) {
   const [now, setNow] = useState(() => Date.now())
   const [editing, setEditing] = useState(false)
@@ -156,7 +158,12 @@ export function NextDrawStrip({ res, game, draws, drawTime, feed, onSetJackpot }
           <span className="nd-when-label">
             {DOW_NAMES[res.nextDow].slice(0, 3)}, {formatDate(res.nextDate)} · {info.drawLabel}
           </span>
-          {c.past
+          {/* "Drawing now" is only true for a few hours. With results missing,
+              this draw is long over, and saying otherwise sent you to a Sync
+              that could not help. */}
+          {behind > 0
+            ? <span className="nd-drawing">result missing — tap Sync</span>
+            : c.past
             ? <span className="nd-drawing">drawing now — tap Sync for the result</span>
             : <FlipClock countdown={c} />}
         </div>

@@ -74,6 +74,29 @@ export function decodeHistory(file: HistoryFile | null): Draw[] {
 
 const fileName = (game: SyncKey) => `history-${game}.json`
 
+/**
+ * Merge freshly fetched draws with the history already held, so a source that
+ * goes thin can only fail to add and never takes anything away.
+ *
+ * The sources are authoritative for every date they cover — a correction there
+ * replaces what was held — and the prior histories fill only the dates no
+ * source carries any more. Prior histories are taken in order, the first one
+ * to hold a date winning, so pass the most trusted first.
+ *
+ * Written after New York cut its Mega Millions dataset to one draw a month in
+ * September 2026: the build came out short, a "never publish anything shorter"
+ * guard kept the committed copy instead, and the published history sat at 31
+ * July for two months while Louisiana had every draw the whole time.
+ */
+export function fillFromPrior(fromSources: Draw[], ...prior: Draw[][]): { merged: Draw[]; kept: number } {
+  const covered = new Set(fromSources.map((d) => d.date))
+  const held = new Map<string, Draw>()
+  for (const list of prior) for (const d of list) if (!covered.has(d.date) && !held.has(d.date)) held.set(d.date, d)
+  const merged = [...fromSources, ...held.values()]
+  merged.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return { merged, kept: held.size }
+}
+
 /** Resolved against the page, so it works under the app's sub-path. */
 export function historyUrl(baseUri: string, game: SyncKey, stamp: number): string {
   return new URL(`${fileName(game)}?t=${stamp}`, baseUri).href

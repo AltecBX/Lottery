@@ -39,6 +39,7 @@ import { ValuePanel } from './components/ValuePanel.tsx'
 import { RecapBanner } from './components/RecapBanner.tsx'
 import { PlayView } from './components/PlayView.tsx'
 import { PredictionBoard } from './components/PredictionBoard.tsx'
+import { missingResults } from './engine/play.ts'
 import { AddResultDialog, ImportDialog, SettingsDialog } from './components/dialogs.tsx'
 import { AddGameDialog } from './components/AddGameDialog.tsx'
 import { BrandLockup, JerryLockup } from './components/Logo.tsx'
@@ -415,7 +416,35 @@ export default function App() {
   }, [activeGame, updateGame])
 
   const staleDays = activeGame?.syncKey && hasData ? daysSinceLastDraw(activeGame, Date.now()) : 0
-  const showStaleNudge = !!activeGame?.syncKey && hasData && staleDays > 4
+  // Scheduled draws the history is missing. When there are any, the "next"
+  // draw everything is computed for has already happened, and the notice says
+  // exactly that instead of a vague "may be available".
+  const missingDraws = useMemo(
+    () => (result?.ok && activeGame?.syncKey ? missingResults(result.nextDate, result.scheduleDows) : 0),
+    [result?.ok, result?.nextDate, result?.scheduleDows, activeGame?.syncKey],
+  )
+  const showStaleNudge = !!activeGame?.syncKey && hasData && (staleDays > 4 || missingDraws > 0)
+  const staleNudge = (lead: string) => (
+    <div className="notice era-banner">
+      <div className="grow">
+        {missingDraws > 0 && result ? (
+          <>
+            <strong>{activeGame!.name} results here stop at {formatDate(draws[draws.length - 1].date)}</strong> —{' '}
+            {missingDraws} draw{missingDraws === 1 ? ' has' : 's have'} happened since, so {lead}{' '}
+            {formatDate(result.nextDate)}, a draw that is already over.
+          </>
+        ) : (
+          <>
+            <strong>New {activeGame!.name} results may be available</strong> — your newest saved draw is{' '}
+            {formatDate(draws[draws.length - 1].date)}.
+          </>
+        )}
+      </div>
+      <button className="btn primary" onClick={() => void syncGame(activeGame!.id)} disabled={syncing}>
+        ⟳ Sync now
+      </button>
+    </div>
+  )
 
   /**
    * Jump to a section, then correct.
@@ -619,17 +648,7 @@ export default function App() {
 
           {hasData && result?.ok && view === 'play' && (
             <div className={`grid play-grid ${computing ? 'stale' : ''}`}>
-              {showStaleNudge && (
-                <div className="notice era-banner">
-                  <div className="grow">
-                    <strong>New {activeGame!.name} results may be available</strong> — your newest saved draw is{' '}
-                    {formatDate(draws[draws.length - 1].date)}.
-                  </div>
-                  <button className="btn primary" onClick={() => void syncGame(activeGame!.id)} disabled={syncing}>
-                    ⟳ Sync now
-                  </button>
-                </div>
-              )}
+              {showStaleNudge && staleNudge('the five below were dealt for')}
               <RecapBanner
                 /* Keyed: `since` is a lazy initialiser read once per mount, so
                    without a remount a game switch renders one game's recap
@@ -659,17 +678,7 @@ export default function App() {
 
           {hasData && result?.ok && view === 'lab' && (
             <div className={`grid ${computing ? 'stale' : ''}`}>
-              {showStaleNudge && (
-                <div className="notice era-banner">
-                  <div className="grow">
-                    <strong>New {activeGame!.name} results may be available</strong> — your newest saved draw is{' '}
-                    {formatDate(draws[draws.length - 1].date)}.
-                  </div>
-                  <button className="btn primary" onClick={() => void syncGame(activeGame!.id)} disabled={syncing}>
-                    ⟳ Sync now
-                  </button>
-                </div>
-              )}
+              {showStaleNudge && staleNudge('everything below is predicting')}
               <RecapBanner
                 /* Keyed: `since` is a lazy initialiser read once per mount, so
                    without a remount a game switch renders one game's recap

@@ -4,7 +4,7 @@ import type { GameData, SavedTicket } from '../engine/games.ts'
 import type { JackpotFeed } from '../engine/feed.ts'
 import { exactPortfolioStats, type PortfolioTicket } from '../engine/portfolio.ts'
 import { CUTS_SET_ON } from '../engine/constraintlab.ts'
-import { PLAY_COUNT, dealPlay, playSetup, seedFor } from '../engine/play.ts'
+import { PLAY_COUNT, dealPlay, missingResults, playSetup, seedFor } from '../engine/play.ts'
 import { DOW_NAMES, formatDate } from '../engine/dates.ts'
 import { drawTimeLabel } from '../engine/drawtime.ts'
 import { NextDrawStrip } from './NextDraw.tsx'
@@ -136,6 +136,11 @@ export function PlayView({ res, game, draws, drawTime, feed, savedTickets, onSet
     } catch { /* user canceled the share sheet */ }
   }
 
+  // Results this device should have and does not; the strip stops saying
+  // "drawing now" for a draw that is long over. The notice above the card
+  // says the rest.
+  const behind = useMemo(() => missingResults(res.nextDate, res.scheduleDows), [res.nextDate, res.scheduleDows])
+
   const lab = res.constraintLab
   const lockedCount = Object.keys(locks).length
 
@@ -151,7 +156,8 @@ export function PlayView({ res, game, draws, drawTime, feed, savedTickets, onSet
         </span>
       </div>
 
-      <NextDrawStrip res={res} game={game} draws={draws} drawTime={drawTime} feed={feed} onSetJackpot={onSetJackpot} />
+      <NextDrawStrip res={res} game={game} draws={draws} drawTime={drawTime} feed={feed} onSetJackpot={onSetJackpot} behind={behind} />
+
 
       {/* Answers "have I already played this one?" without leaving the screen. */}
       {held.length > 0 && (
