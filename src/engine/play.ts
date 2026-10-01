@@ -2,6 +2,7 @@ import type { EngineResult } from './types.ts'
 import { buildPortfolio, type PortfolioShape, type PortfolioTicket } from './portfolio.ts'
 import { reducedPoolAcceptor, type ConstraintMode } from './constraintlab.ts'
 import { uncrowded } from './crowd.ts'
+import { isoKey } from './dates.ts'
 
 /**
  * The Play screen's five games, as a pure function of the engine's output.
@@ -35,6 +36,44 @@ export function seedFor(date: string): number {
   }
   // Keep it inside the LCG range "Another five" steps through.
   return (h % 2147483646) + 1
+}
+
+/**
+ * Scheduled draws between the next draw the history implies and today — the
+ * results this device should have and does not.
+ *
+ * The Play screen deals for the draw after the newest one it holds. With the
+ * history behind, that "next" draw is one that has already happened: in
+ * October 2026 the published Mega Millions file had sat at 31 July for two
+ * months, so the screen offered five games for 4 August under a "drawing now"
+ * label, and Sync could not fix it because Sync reads that same file. Counting
+ * the gap is what lets the screen say so instead.
+ *
+ * Today itself is never counted: tonight's draw has not happened yet, and the
+ * morning after a draw the result is normally a sync away, not missing.
+ */
+export function missedDraws(nextDate: string, scheduleDows: readonly number[], today: string): number {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(nextDate) || scheduleDows.length === 0) return 0
+  let n = 0
+  const d = new Date(`${nextDate}T12:00:00Z`)
+  for (let guard = 0; guard < 4000; guard++) {
+    const iso = d.toISOString().slice(0, 10)
+    if (iso >= today) break
+    if (scheduleDows.includes(d.getUTCDay())) n++
+    d.setUTCDate(d.getUTCDate() + 1)
+  }
+  return n
+}
+
+/**
+ * The draws to warn about right now, on the device's own calendar. A day's
+ * grace before saying anything — the morning after a draw its result is a sync
+ * away, not missing — and once past it, the count runs up to today.
+ */
+export function missingResults(nextDate: string, scheduleDows: readonly number[], now: Date = new Date()): number {
+  const day = (d: Date) => isoKey(d.getFullYear(), d.getMonth() + 1, d.getDate())
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+  return missedDraws(nextDate, scheduleDows, day(yesterday)) > 0 ? missedDraws(nextDate, scheduleDows, day(now)) : 0
 }
 
 export interface PlaySetup {

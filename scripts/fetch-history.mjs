@@ -18,10 +18,12 @@ import { fileURLToPath } from 'node:url'
 import { parseDelimitedText } from '../src/engine/parse.ts'
 import { mergeDraws } from '../src/engine/parse.ts'
 import { parseSocrataRows, SYNC_SOURCES, CSV_SOURCES } from '../src/engine/sync.ts'
-import { encodeHistory } from '../src/engine/history.ts'
+import { encodeHistory, decodeHistory, fillFromPrior } from '../src/engine/history.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = resolve(here, '..', 'public')
+/** Where the live copy is served, so a build can never publish less than is already up. */
+const PUBLISHED_BASE = process.env.PUBLISHED_BASE ?? 'https://altecbx.github.io/Lottery/'
 const TIMEOUT_MS = 60_000
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 
@@ -73,6 +75,44 @@ for (const { key } of SYNC_SOURCES) {
   if (merged.length === 0) {
     console.warn(`${key}: no source reachable — leaving any existing file in place`)
     continue
+  }
+
+  /*
+   * Fill the dates the sources no longer cover from the history already held.
+   *
+   * This used to rebuild from the sources alone and refuse to publish anything
+   * shorter than the committed file. In September 2026 New York cut its Mega
+   * Millions dataset to one draw a month — 293 rows where there had been
+   * 2,500 — so every build came out short, the guard kept the committed copy,
+   * and the published history sat frozen at 31 July for two months with no
+   * error anywhere. Worse, the copy it kept was the stale one in the repo: the
+   * fresher file this job had published itself was never read back.
+   *
+   * Now a source going thin can only fail to add; it can never take away. The
+   * sources stay authoritative for every date they cover — a correction there
+   * still wins — and the prior history, both the committed copy and whatever
+   * is live, fills only the dates they have dropped.
+   */
+  const prior = []
+  try {
+    const committed = decodeHistory(JSON.parse(await readFile(outFile, 'utf8')))
+    prior.push(committed)
+    console.log(`${key}: committed copy holds ${committed.length} draws`)
+  } catch { /* none yet */ }
+  if (PUBLISHED_BASE) {
+    try {
+      const live = decodeHistory(JSON.parse(await get(`${PUBLISHED_BASE}history-${key}.json?t=${Date.now()}`, 'application/json')))
+      prior.push(live)
+      console.log(`${key}: published copy holds ${live.length} draws`)
+    } catch (err) {
+      console.warn(`${key}: published copy unavailable (${err.message})`)
+    }
+  }
+  const filled = fillFromPrior(merged, ...prior)
+  if (filled.kept) {
+    merged = filled.merged
+    sources.push('previously published history (for dates no source still carries)')
+    console.log(`${key}: kept ${filled.kept} draws the sources no longer carry`)
   }
 
   // Never publish a file thinner than the one already there: a source having a

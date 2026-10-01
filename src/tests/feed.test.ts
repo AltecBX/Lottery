@@ -20,7 +20,8 @@ import { choose, matchOdds } from '../engine/odds.ts'
 import { flipUnits } from '../components/FlipClock.tsx'
 import { resolveNextDraw } from '../components/NextDraw.tsx'
 import { boardCells } from '../components/PredictionBoard.tsx'
-import { decodeHistory, encodeHistory, historyUrl } from '../engine/history.ts'
+import { missedDraws, missingResults } from '../engine/play.ts'
+import { decodeHistory, encodeHistory, fillFromPrior, historyUrl } from '../engine/history.ts'
 import { dowOf } from '../engine/dates.ts'
 import { countdownTo } from '../engine/drawtime.ts'
 import type { Draw } from '../engine/types.ts'
@@ -673,5 +674,80 @@ describe('audited robustness fixes', () => {
     const stats = analyzeJackpots(draws)
     expect(stats!.winners).toHaveLength(0)
     expect(stats!.rolloverRun).toBe(0)
+  })
+})
+
+describe('a source going thin', () => {
+  // Every Tuesday and Friday across two months, like Mega Millions
+  const twice = (() => {
+    const out: Draw[] = []
+    const d = new Date('2026-08-04T12:00:00Z')
+    for (let i = 0; out.length < 17; i++) {
+      if ([2, 5].includes(d.getUTCDay())) out.push(D(d.toISOString().slice(0, 10), [1 + i % 60, 2 + i % 60, 3 + i % 60, 4 + i % 60, 5 + i % 60], 1))
+      d.setUTCDate(d.getUTCDate() + 1)
+    }
+    return out
+  })()
+
+  it('can only fail to add, never take away', () => {
+    /*
+     * New York cut its Mega Millions set to one draw a month. Rebuilt from the
+     * sources alone the history came out short, a never-shorter guard kept the
+     * stale committed copy, and the site sat at 31 July for two months.
+     */
+    const prior = twice.slice(0, 12)
+    const thin = twice.filter((_, i) => i % 8 === 0) // what one-a-month looks like
+    const { merged, kept } = fillFromPrior(thin, prior)
+    expect(merged.length).toBe(12 + thin.filter((d) => !prior.some((p) => p.date === d.date)).length)
+    for (const p of prior) expect(merged.some((m) => m.date === p.date)).toBe(true)
+    expect(kept).toBe(prior.filter((p) => !thin.some((t) => t.date === p.date)).length)
+    expect(merged.map((d) => d.date)).toEqual([...merged.map((d) => d.date)].sort())
+  })
+
+  it('lets a source correct a date it still carries', () => {
+    const prior = [D('2026-08-04', [1, 2, 3, 4, 5], 9)]
+    const corrected = [D('2026-08-04', [1, 2, 3, 4, 6], 9)]
+    const { merged } = fillFromPrior(corrected, prior)
+    expect(merged).toHaveLength(1)
+    expect(merged[0].sorted).toEqual([1, 2, 3, 4, 6])
+  })
+
+  it('takes a date from the most trusted prior history first', () => {
+    const committed = [D('2026-08-07', [1, 2, 3, 4, 5], 2)]
+    const published = [D('2026-08-07', [1, 2, 3, 4, 5], 2), D('2026-08-11', [6, 7, 8, 9, 10], 3)]
+    const { merged } = fillFromPrior([], committed, published)
+    expect(merged.map((d) => d.date)).toEqual(['2026-08-07', '2026-08-11'])
+  })
+})
+
+describe('results this device is missing', () => {
+  const tueFri = [2, 5]
+
+  it('counts nothing when the next draw is still ahead', () => {
+    expect(missedDraws('2026-10-02', tueFri, '2026-10-01')).toBe(0)
+    // tonight's draw is not missing yet
+    expect(missedDraws('2026-10-02', tueFri, '2026-10-02')).toBe(0)
+  })
+
+  it('counts every scheduled draw the history skipped', () => {
+    // The published Mega Millions file stopped at 31 July: from the 4 August
+    // draw to 1 October, seventeen Tuesday and Friday draws had happened.
+    expect(missedDraws('2026-08-04', tueFri, '2026-10-01')).toBe(17)
+  })
+
+  it('ignores days the game does not draw on', () => {
+    expect(missedDraws('2026-10-02', tueFri, '2026-10-05')).toBe(1) // Fri only; Sat, Sun skipped
+    expect(missedDraws('nonsense', tueFri, '2026-10-05')).toBe(0)
+    expect(missedDraws('2026-10-02', [], '2026-10-05')).toBe(0)
+  })
+
+  it('gives the morning after a draw a day of grace before warning', () => {
+    const at = (iso: string) => new Date(`${iso}T09:00:00`) // device-local morning
+    // Friday's draw, Saturday morning: a sync away, not missing
+    expect(missingResults('2026-10-02', tueFri, at('2026-10-03'))).toBe(0)
+    // Sunday morning, still no Friday result: now it is missing
+    expect(missingResults('2026-10-02', tueFri, at('2026-10-04'))).toBe(1)
+    // The October 2026 state: every draw since 4 August
+    expect(missingResults('2026-08-04', tueFri, at('2026-10-01'))).toBe(17)
   })
 })
