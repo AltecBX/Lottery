@@ -29,6 +29,14 @@ export interface LearnerState {
   sSum: Record<string, number>
   sCount: Record<string, number>
   sEvaluated: number
+  /**
+   * The chance rates the hit totals above were scored against. Skill is hits
+   * above chance, and chance moves with the pool, so a warm start re-bases
+   * the carried totals: each past draw keeps the excess it earned against
+   * its own pool rather than being re-judged against the new one.
+   */
+  chance10: number
+  sChance3: number
 }
 
 /** One walk-forward step as the research harness sees it: what each model knew before the draw. */
@@ -161,7 +169,10 @@ export function runBacktest(
   const emaG: Record<string, number> = { ...(warm?.emaG ?? {}) }
   const sumHits10: Record<string, number> = { ...(warm?.sumHits10 ?? {}) }
   const evalCount: Record<string, number> = { ...(warm?.evalCount ?? {}) }
-  if (warm) for (let s = 0; s < F; s++) { mlW[s] = warm.mlW[s] ?? 0; mlG[s] = warm.mlG[s] ?? 0 }
+  if (warm) {
+    for (let s = 0; s < F; s++) { mlW[s] = warm.mlW[s] ?? 0; mlG[s] = warm.mlG[s] ?? 0 }
+    for (const k of Object.keys(sumHits10)) sumHits10[k] += (evalCount[k] ?? 0) * (chance10 - warm.chance10)
+  }
   const emaLambda = Math.pow(0.5, 1 / 80)
 
   /**
@@ -186,6 +197,7 @@ export function runBacktest(
   const sSum: Record<string, number> = { ...(warm?.sSum ?? {}) }
   const sCount: Record<string, number> = { ...(warm?.sCount ?? {}) }
   const sChance3 = specialKs > 0 ? Math.min(3, specialKs) / specialKs : 0
+  if (warm && specialKs > 0) for (const k of Object.keys(sSum)) sSum[k] += (sCount[k] ?? 0) * (sChance3 - warm.sChance3)
   const sHitsAtRank = new Uint32Array(Math.max(1, specialKs + 1))
   // Learned-state counters carry over from a warm start; the summary's own
   // tallies below count only this run's draws.
@@ -452,6 +464,7 @@ export function runBacktest(
     emaG: { ...emaG }, sumHits10: { ...sumHits10 }, evalCount: { ...evalCount }, evaluated: learned,
     mlW: Array.from(mlW), mlG: Array.from(mlG),
     sEma: { ...sEma }, sSum: { ...sSum }, sCount: { ...sCount }, sEvaluated: sLearned,
+    chance10, sChance3,
   }
   return { summary, learner, weights: finalWeights, rankHitRate, specialWeights, specialRankHitRate, mlWeights: Array.from(mlW) }
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { compareModels, splitSteps } from '../engine/research.ts'
 import { compareStrategies, mainEras, runReplay } from '../engine/replay.ts'
 import { jointTheory, studyTopPositions, topShare } from '../engine/tailstudy.ts'
-import { MIN_HISTORY } from '../engine/backtest.ts'
+import { MIN_HISTORY, runBacktest } from '../engine/backtest.ts'
 import { METHOD_FROZEN_ON } from '../engine/constraintlab.ts'
 import { rulesAt, type RuleKey } from '../engine/rules.ts'
 import { generateSampleDraws } from '../engine/sample.ts'
@@ -113,6 +113,30 @@ describe('comparing models on draws none of them was tuned on', () => {
     expect(cmp.redundancy.signals).toBe(20)
     expect(cmp.redundancy.effective).toBeGreaterThan(1)
     expect(cmp.redundancy.effective).toBeLessThan(cmp.redundancy.signals)
+  })
+})
+
+describe('carrying learning across a pool change', () => {
+  it('keeps each signal\'s record against the chance rate of the pool it was earned in', () => {
+    // Mega Millions went 75 → 70: chance for a top 10 rose from 0.667 to 0.714.
+    // Carried over unchanged, every old hit would be re-judged against the new
+    // rate and each signal's record would drop by 0.048 with no new evidence.
+    const old = runBacktest(fairDraws(260, 8, 75), 75, 5, false).learner
+    const carried = runBacktest(fairDraws(10, 9, 70), 70, 5, false, 0, { warm: old }).learner
+    expect(carried.chance10).toBeCloseTo(50 / 70, 12)
+    for (const k of Object.keys(old.sumHits10)) {
+      const before = old.sumHits10[k] / old.evalCount[k] - old.chance10
+      const after = carried.sumHits10[k] / carried.evalCount[k] - carried.chance10
+      expect(after).toBeCloseTo(before, 12)
+    }
+  })
+
+  it('leaves a run without a warm start exactly as it was', () => {
+    const draws = fairDraws(200, 10, 69)
+    const a = runBacktest(draws, 69, 5, false)
+    const b = runBacktest(draws, 69, 5, false, 0, {})
+    expect(b.summary.points).toEqual(a.summary.points)
+    expect(b.weights).toEqual(a.weights)
   })
 })
 
@@ -268,8 +292,12 @@ describe('the prediction log keeps what was shown', () => {
 
   it('keeps the first prediction for a draw and never rewrites it', async () => {
     const { recordSnapshot, snapshotOf } = await import('../engine/snapshots.ts')
-    const first = snapshotOf(res, new Date('2026-10-27T10:00:00Z'))!
+    // Recorded the morning of the draw; refused once the draw has been held
+    const morning = new Date(`${res.nextDate}T08:00:00`)
+    const first = snapshotOf(res, morning)!
     expect(first.date).toBe(res.nextDate)
+    expect(snapshotOf(res, new Date(`${res.nextDate}T23:30:00`))).toBeNull()
+    expect(snapshotOf(res, new Date(morning.getTime() + 3 * 86400000))).toBeNull()
     expect(first.top10).toEqual(res.top10.map((p) => p.number))
     const book = recordSnapshot({}, 'g', first)
     const later = { ...first, savedAt: '2026-10-27T20:00:00.000Z', top10: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] }
@@ -278,6 +306,14 @@ describe('the prediction log keeps what was shown', () => {
     const other = recordSnapshot(book, 'h', later)
     expect(other.g).toEqual([first])
     expect(other.h).toEqual([later])
+  })
+
+  it('refuses a snapshot for a drawing already held, by the official clock', async () => {
+    const { snapshotOf } = await import('../engine/snapshots.ts')
+    const pb = { ...res, nextDate: '2026-10-28' }
+    // Powerball draws at 10:59 PM Eastern: 02:59 UTC the next morning
+    expect(snapshotOf(pb, new Date('2026-10-29T02:58:00Z'), 'powerball')).not.toBeNull()
+    expect(snapshotOf(pb, new Date('2026-10-29T03:00:00Z'), 'powerball')).toBeNull()
   })
 
   it('records the weights each prediction used and what the last update changed', () => {

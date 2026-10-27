@@ -29,7 +29,7 @@ export function useSnapshots(
     if (!game || !isRuleKey(syncKey) || !result?.ok || computing || !draws.length) return
     const last = draws[draws.length - 1].date
     if (result.lastDate !== last || result.rules?.K !== rulesAt(syncKey, last)?.K) return
-    const snap = snapshotOf(result)
+    const snap = snapshotOf(result, new Date(), syncKey)
     if (!snap) return
     const current = read()
     const next = recordSnapshot(current, game, snap)

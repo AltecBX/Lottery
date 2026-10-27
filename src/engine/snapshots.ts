@@ -1,4 +1,6 @@
 import type { EngineResult } from './types.ts'
+import type { SyncKey } from './sync.ts'
+import { nextDrawInstant } from './drawtime.ts'
 
 /**
  * What the app actually showed before a draw, kept as it was.
@@ -30,8 +32,16 @@ export const SNAPSHOT_KEY = 'patternlab.snapshots.v1'
 /** Per game; at two or three draws a week this is years of history */
 export const SNAPSHOT_CAP = 600
 
-export function snapshotOf(res: EngineResult, now: Date = new Date()): PredictionSnapshot | null {
+/**
+ * The prediction for the next drawing, or null when that drawing is no longer
+ * in the future. An app opened on a stale history infers a "next" drawing
+ * that may already have been held; kept as live, it would count as a
+ * prediction made before a result that was in fact already known.
+ */
+export function snapshotOf(res: EngineResult, now: Date = new Date(), key?: SyncKey): PredictionSnapshot | null {
   if (!res.ok || !res.nextDate || !res.top10.length) return null
+  const at = nextDrawInstant(res.nextDate, key)
+  if (!at || at.getTime() <= now.getTime()) return null
   const deep = res.constraintLab?.modes.find((m) => m.key === 'deep')
   return {
     date: res.nextDate,
