@@ -5,7 +5,7 @@ import {
 import { runEngine } from '../engine/engine.ts'
 import { DEFAULT_SETTINGS, type Draw } from '../engine/types.ts'
 import { addDays, dowOf } from '../engine/dates.ts'
-import { combineOfficial, syncMessage } from '../engine/sync.ts'
+import { applySync, combineOfficial, syncMessage } from '../engine/sync.ts'
 import { reconcileDraws } from '../engine/parse.ts'
 import { decodeHistory, encodeHistory, mergeSources } from '../engine/history.ts'
 
@@ -203,6 +203,30 @@ describe('keeping the record current and consistent', () => {
     expect(added).toBe(1)
     expect(merged.map((d) => `${d.date}:${d.special}`)).toEqual(['2022-05-10:9', '2022-05-13:7', '2022-05-17:2', '2026-10-28:1'])
     expect(verifyHistory(merged, 'megamillions').rejected.size).toBe(0)
+  })
+
+  it('never lets a live source alone overwrite a stored result', () => {
+    // The published file failed to load, so sync fell back to New York, which
+    // still reports the 2022-05-10 Mega Ball as 6. The phone's correct 9 —
+    // and its jackpot — must survive; only dates nothing holds may be filled.
+    const stored = [mk('2022-05-10', [15, 19, 20, 61, 70], 9, { jackpot: 59e6 }), mk('2022-05-13', [1, 2, 3, 4, 5], 7)]
+    const newYork = [mk('2022-05-10', [15, 19, 20, 61, 70], 6), mk('2022-05-13', [1, 2, 3, 4, 5], 7), mk('2022-05-17', [11, 12, 13, 14, 15], 2)]
+    const outcome = combineOfficial('megamillions', [], newYork, '2022-05-18')
+    expect(outcome.trusted).toBe(0)
+    const { merged, added, corrected } = applySync(stored, outcome)
+    expect(corrected).toEqual([])
+    expect(added).toBe(1)
+    expect(merged.filter((d) => d.date === '2022-05-10')).toEqual([stored[0]])
+    expect(merged.map((d) => d.date)).toEqual(['2022-05-10', '2022-05-13', '2022-05-17'])
+
+    // With the published file in hand, its rows still correct a wrong stored one,
+    // and live rows past its end only add.
+    const published = [mk('2022-05-10', [15, 19, 20, 61, 70], 9), mk('2022-05-13', [1, 2, 3, 4, 5], 7)]
+    const phone = [mk('2022-05-10', [15, 19, 20, 61, 70], 6), mk('2022-05-13', [1, 2, 3, 4, 5], 7)]
+    const both = applySync(phone, combineOfficial('megamillions', published, newYork, '2022-05-18'))
+    expect(both.corrected).toEqual(['2022-05-10'])
+    expect(both.merged.find((d) => d.date === '2022-05-10')!.special).toBe(9)
+    expect(both.merged.map((d) => d.date)).toEqual(['2022-05-10', '2022-05-13', '2022-05-17'])
   })
 
   it('builds the published file from the trusted source where two disagree, and records the disagreement', () => {

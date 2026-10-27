@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Draw, Settings } from './engine/types.ts'
 import { DEFAULT_SETTINGS } from './engine/types.ts'
-import { mergeDraws, reconcileDraws } from './engine/parse.ts'
+import { mergeDraws } from './engine/parse.ts'
 import { generateSampleDraws } from './engine/sample.ts'
-import { attachSales, fetchOfficialResults, fetchSalesByDay, syncMessage, type SyncKey } from './engine/sync.ts'
+import { applySync, attachSales, fetchOfficialResults, fetchSalesByDay, syncMessage, type SyncKey } from './engine/sync.ts'
 import {
   createGame, daysSinceLastDraw, migrateLegacy, OFFICIAL_GAMES,
   type GameData, type GamesState, type SavedTicket,
@@ -266,10 +266,11 @@ export default function App() {
        * committed state instead, which is what the updater will see.
        */
       const latest = gamesRef.current.games.find((g) => g.id === gameId)?.draws ?? []
-      const { added, corrected } = reconcileDraws(latest, outcome.draws)
-      // The official record is authoritative for its own dates, so a stored
-      // row it contradicts is replaced rather than kept beside it.
-      updateGame(gameId, (g) => ({ ...g, draws: reconcileDraws(g.draws, outcome.draws).merged }))
+      // The published record is authoritative for its own dates, so a stored
+      // row it contradicts is replaced rather than kept beside it; live rows
+      // past its end only fill dates nothing holds yet.
+      const { added, corrected } = applySync(latest, outcome)
+      updateGame(gameId, (g) => ({ ...g, draws: applySync(g.draws, outcome).merged }))
       // Quiet only when there is nothing to say: a source that is behind is
       // reported even on the automatic refresh.
       if (added > 0 || corrected.length || outcome.freshness.overdue.length || !silentWhenCurrent) {

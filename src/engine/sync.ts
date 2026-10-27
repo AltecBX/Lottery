@@ -1,5 +1,5 @@
 import type { Draw } from './types.ts'
-import { parseDelimitedText, type ParseOutcome } from './parse.ts'
+import { parseDelimitedText, reconcileDraws, type ParseOutcome } from './parse.ts'
 import { decodeHistory, fetchPublishedHistory } from './history.ts'
 import { dowOf, isoKey } from './dates.ts'
 import { overdueDrawings } from './rules.ts'
@@ -92,7 +92,20 @@ export interface Freshness {
   sources: string[]
 }
 
-export type SyncOutcome = ParseOutcome & { freshness: Freshness }
+/**
+ * `draws` is the published history followed by any live rows past its end.
+ * The first `trusted` of them are the reconciled record; only those may
+ * replace a result already stored.
+ */
+export type SyncOutcome = ParseOutcome & { freshness: Freshness; trusted: number }
+
+/**
+ * Fold a sync's rows into a stored history: the published record replaces
+ * what it contradicts, live rows past its end only fill dates nothing holds.
+ */
+export function applySync(existing: Draw[], outcome: SyncOutcome): ReturnType<typeof reconcileDraws> {
+  return reconcileDraws(existing, outcome.draws.slice(0, outcome.trusted), outcome.draws.slice(outcome.trusted))
+}
 
 /** The device's own calendar date. */
 export const localToday = (now: Date = new Date()): string => isoKey(now.getFullYear(), now.getMonth() + 1, now.getDate())
@@ -127,6 +140,7 @@ export function combineOfficial(key: SyncKey, published: Draw[], live: Draw[] | 
     drawSize: draws.length ? draws[0].sorted.length : 0,
     hasSpecial: draws.some((d) => d.special !== undefined),
     freshness: { latest, overdue: latest ? overdueDrawings(key, latest, today) : [], sources },
+    trusted: published.length,
   }
 }
 

@@ -437,12 +437,21 @@ export function mergeDraws(existing: Draw[], incoming: Draw[]): { merged: Draw[]
  * record holds takes the record's result, and anything stored for a date it
  * does not hold — a result added by hand ahead of the sync — is kept.
  *
+ * Only the reconciled published history may overwrite. Rows from a single
+ * live source (`extension`) fill dates nothing holds yet and never replace a
+ * stored result: New York alone still reports the 2022-05-10 Mega Ball as 6,
+ * so a sync that fell back to it when the published file failed to load
+ * would otherwise swap a phone's correct 9 for the wrong 6 and drop its
+ * jackpot along with it.
+ *
  * `mergeDraws` alone never removes anything, so a wrong row, once synced,
  * stayed on the phone for good: the 2022-05-10 Mega Millions draw with New
  * York's Mega Ball 6 sat beside the correct 9 even after the published file
  * was fixed. The official record is authoritative for its own dates.
  */
-export function reconcileDraws(existing: Draw[], official: Draw[]): { merged: Draw[]; added: number; corrected: string[] } {
+export function reconcileDraws(
+  existing: Draw[], official: Draw[], extension: Draw[] = [],
+): { merged: Draw[]; added: number; corrected: string[] } {
   const key = (d: Draw) => `${d.sorted.join(',')}|${d.special ?? ''}`
   const officialByDate = new Map<string, Set<string>>()
   for (const d of official) {
@@ -458,9 +467,11 @@ export function reconcileDraws(existing: Draw[], official: Draw[]): { merged: Dr
     corrected.add(d.date)
     return false
   })
-  const { merged } = mergeDraws(kept, official)
-  let added = 0
-  for (const date of officialByDate.keys()) if (!storedDates.has(date)) added++
+  const { merged: reconciled } = mergeDraws(kept, official)
+  const held = new Set(reconciled.map((d) => d.date))
+  const fresh = extension.filter((d) => !held.has(d.date))
+  const { merged } = mergeDraws(reconciled, fresh)
+  const added = new Set([...officialByDate.keys(), ...fresh.map((d) => d.date)].filter((date) => !storedDates.has(date))).size
   return { merged, added, corrected: [...corrected].sort() }
 }
 
