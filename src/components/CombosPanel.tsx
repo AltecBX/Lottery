@@ -29,6 +29,7 @@ export function CombosPanel({ res }: { res: EngineResult }) {
                   <span className="pair-cell" style={{ gap: 5 }}>
                     {c.numbers.map((n) => <Ball key={n} n={n} size="sm" variant={i === 0 ? 'pick' : ''} />)}
                   </span>
+                  {c.inPool === false && <span className="hint" style={{ display: 'block', fontSize: 11 }}>outside the reduced pool</span>}
                 </td>
                 <td className="num" style={{ fontWeight: 640 }}>{c.relative}</td>
                 <td className="num">{fmtPct(c.avgProbability)}</td>
@@ -40,6 +41,13 @@ export function CombosPanel({ res }: { res: EngineResult }) {
           </tbody>
         </table>
       </div>
+      {combos.some((c) => c.inPool === false) && (
+        <p className="hint" style={{ display: 'block', marginTop: 8 }}>
+          Not one combination of the top {combos[0].candidates ?? ''} numbers fits inside the reduced pool, so these come
+          from outside it. They are shown rather than hidden so the list is never empty — but they break the pool's own
+          rules.
+        </p>
+      )}
       {res.positions.length > 0 && (
         <>
           <div className="mini-title" style={{ marginTop: 14 }}>

@@ -11,8 +11,55 @@ export const MIN_HISTORY = 30
  */
 export const ML_TUNING = { eta: 0.02, l2: 1e-3 }
 
+/**
+ * Everything the walk-forward learns that is not tied to one number pool: how
+ * well each signal has done relative to chance, and the combiner's
+ * coefficients. Signals are z-normalised over whatever pool is in force, so
+ * this can be carried across a rule change while the per-number statistics,
+ * which belong to the old pool, start again.
+ */
+export interface LearnerState {
+  emaG: Record<string, number>
+  sumHits10: Record<string, number>
+  evalCount: Record<string, number>
+  evaluated: number
+  mlW: number[]
+  mlG: number[]
+  sEma: Record<string, number>
+  sSum: Record<string, number>
+  sCount: Record<string, number>
+  sEvaluated: number
+}
+
+/** One walk-forward step as the research harness sees it: what each model knew before the draw. */
+export interface StepTrace {
+  t: number
+  date: string
+  K: number
+  /** Signal keys, `mlModel` last, aligned with `zs` */
+  keys: string[]
+  zs: Float64Array[]
+  /** Ensemble weights used for this step, learned from earlier steps only */
+  weights: Record<string, number>
+  ens: Float64Array
+  /** The combiner's probability for each number */
+  mlProbs: Float64Array
+  actual: number[]
+}
+
+export interface BacktestOptions {
+  /** Learner state to start from instead of a blank one */
+  warm?: LearnerState
+  /** Called once per scored step, after prediction and before learning from it */
+  trace?: (step: StepTrace) => void
+  /** Combiner learning rate and L2 penalty, for sensitivity runs */
+  ml?: { eta: number; l2: number }
+}
+
 export interface BacktestOutput {
   summary: BacktestSummary
+  /** Learner state after the last draw, for warm-starting a later run */
+  learner: LearnerState
   /** Learned ensemble weights (used for the live prediction) */
   weights: Record<string, number>
   /** Calibrated P(hit) for each predicted rank 1..K */
@@ -86,7 +133,9 @@ export function isotonicDecreasing(rates: number[], weights: number[]): number[]
   return out
 }
 
-export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosition: boolean, specialKs = 0): BacktestOutput {
+export function runBacktest(
+  draws: Draw[], K: number, drawSize: number, usePosition: boolean, specialKs = 0, opts: BacktestOptions = {},
+): BacktestOutput {
   const N = draws.length
   const D = drawSize
   const state = new HistoryState(K, D)
@@ -103,14 +152,16 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
   const F = baseKeys.length
   const mlW = new Float64Array(F)
   const mlG = new Float64Array(F)
-  const ML_ETA = ML_TUNING.eta
-  const ML_L2 = ML_TUNING.l2
+  const ML_ETA = opts.ml?.eta ?? ML_TUNING.eta
+  const ML_L2 = opts.ml?.l2 ?? ML_TUNING.l2
+  const warm = opts.warm
   let mlLLGain = 0 // Σ log(p_actual · K): log-likelihood above uniform, in nats
 
   // Global skill state: recent (EMA) and lifetime, per signal
-  const emaG: Record<string, number> = {}
-  const sumHits10: Record<string, number> = {}
-  const evalCount: Record<string, number> = {}
+  const emaG: Record<string, number> = { ...(warm?.emaG ?? {}) }
+  const sumHits10: Record<string, number> = { ...(warm?.sumHits10 ?? {}) }
+  const evalCount: Record<string, number> = { ...(warm?.evalCount ?? {}) }
+  if (warm) for (let s = 0; s < F; s++) { mlW[s] = warm.mlW[s] ?? 0; mlG[s] = warm.mlG[s] ?? 0 }
   const emaLambda = Math.pow(0.5, 1 / 80)
 
   /**
@@ -131,11 +182,14 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
   }
 
   // Bonus-ball learner state (only used when specialKs > 0)
-  const sEma: Record<string, number> = {}
-  const sSum: Record<string, number> = {}
-  const sCount: Record<string, number> = {}
+  const sEma: Record<string, number> = { ...(warm?.sEma ?? {}) }
+  const sSum: Record<string, number> = { ...(warm?.sSum ?? {}) }
+  const sCount: Record<string, number> = { ...(warm?.sCount ?? {}) }
   const sChance3 = specialKs > 0 ? Math.min(3, specialKs) / specialKs : 0
   const sHitsAtRank = new Uint32Array(Math.max(1, specialKs + 1))
+  // Learned-state counters carry over from a warm start; the summary's own
+  // tallies below count only this run's draws.
+  let sLearned = warm?.sEvaluated ?? 0
   let sEvaluated = 0, sTop1 = 0, sTop3 = 0
   const sEmaLambda = Math.pow(0.5, 1 / 80)
   const sSkillUsed = (): Record<string, number> => {
@@ -148,9 +202,11 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
   }
 
   const points: BacktestPoint[] = []
+  let prevWeights: Record<string, number> | null = null
   const dowAgg = Array.from({ length: 7 }, () => ({ draws: 0, ens10: 0, base10: 0 }))
   const hitsAtRank = new Uint32Array(K + 1)
   let evaluated = 0
+  let learned = warm?.evaluated ?? 0
   let ensSumPick = 0, ensSum10 = 0, baseSumPick = 0, baseSum10 = 0
   let ens10AtLeast2 = 0
 
@@ -191,7 +247,7 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
       }
 
       // Ensemble uses weights learned from draws BEFORE t only
-      const weights = weightsFromSkills(keys, skillUsed(), evaluated, chance10)
+      const weights = weightsFromSkills(keys, skillUsed(), learned, chance10)
       const ens = new Float64Array(K + 1)
       for (let s = 0; s < keys.length; s++) {
         const w = weights[keys[s]] ?? 0
@@ -236,7 +292,20 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
         baselineHits10: b10,
         predictedTop: order.slice(0, Math.min(10, K)),
         actual: [...target.sorted],
+        weightsTop: Object.entries(weights).sort((a, b) => b[1] - a[1]).slice(0, 3)
+          .map(([k, w]) => [k, Math.round(w * 1000) / 1000] as [string, number]),
       }
+      // What the last model update changed: the weight that moved the most
+      if (prevWeights) {
+        let key = '', delta = 0
+        for (const k of keys) {
+          const d = (weights[k] ?? 0) - (prevWeights[k] ?? 0)
+          if (Math.abs(d) > Math.abs(delta)) { key = k; delta = d }
+        }
+        // An empty key means the update changed nothing — itself worth saying
+        point.weightShift = { key, delta: Math.round(delta * 10000) / 10000 }
+      }
+      prevWeights = weights
 
       // Bonus-ball self-test (own pool, own learned weights)
       if (specialKs > 0 && target.special !== undefined && target.special >= 1 && target.special <= specialKs) {
@@ -248,7 +317,7 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
           const top3 = topIndicesPartial(sZs[i], specialKs, Math.min(3, specialKs))
           sSigHits[sKeys[i]] = top3.includes(target.special) ? 1 : 0
         }
-        const sWeights = weightsFromSkills(sKeys, sSkillUsed(), sEvaluated, sChance3)
+        const sWeights = weightsFromSkills(sKeys, sSkillUsed(), sLearned, sChance3)
         const sEns = new Float64Array(specialKs + 1)
         for (let i = 0; i < sKeys.length; i++) {
           const w = sWeights[sKeys[i]] ?? 0
@@ -261,6 +330,7 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
         if (rank === 0) sTop1++
         if (rank >= 0 && rank < 3) sTop3++
         sEvaluated++
+        sLearned++
         point.specialTop = sOrder.slice(0, Math.min(3, specialKs))
         point.specialActual = target.special
         for (const k of sKeys) {
@@ -272,6 +342,8 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
       }
 
       points.push(point)
+      opts.trace?.({ t, date: target.date, K, keys, zs, weights, ens, mlProbs: probs, actual: [...actual] })
+      learned++
 
       // Update skill state AFTER evaluating (this draw informs future weights only)
       for (const k of keys) {
@@ -306,13 +378,13 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
   }
   const rankHitRate = evaluated > 0 ? isotonicDecreasing(rates, rateW) : Array.from({ length: K }, () => D / K)
 
-  const finalWeights = weightsFromSkills(keysAll, skillUsed(), evaluated, chance10)
+  const finalWeights = weightsFromSkills(keysAll, skillUsed(), learned, chance10)
 
   // Bonus-ball final weights + rank calibration
   let specialWeights: Record<string, number> | null = null
   let specialRankHitRate: number[] | null = null
   if (specialKs > 0) {
-    specialWeights = weightsFromSkills([...SPECIAL_SIGNAL_KEYS], sSkillUsed(), sEvaluated, sChance3)
+    specialWeights = weightsFromSkills([...SPECIAL_SIGNAL_KEYS], sSkillUsed(), sLearned, sChance3)
     const Ms = 25
     const sRates: number[] = []
     const sW: number[] = []
@@ -376,5 +448,10 @@ export function runBacktest(draws: Draw[], K: number, drawSize: number, usePosit
       : {}),
   }
 
-  return { summary, weights: finalWeights, rankHitRate, specialWeights, specialRankHitRate, mlWeights: Array.from(mlW) }
+  const learner: LearnerState = {
+    emaG: { ...emaG }, sumHits10: { ...sumHits10 }, evalCount: { ...evalCount }, evaluated: learned,
+    mlW: Array.from(mlW), mlG: Array.from(mlG),
+    sEma: { ...sEma }, sSum: { ...sSum }, sCount: { ...sCount }, sEvaluated: sLearned,
+  }
+  return { summary, learner, weights: finalWeights, rankHitRate, specialWeights, specialRankHitRate, mlWeights: Array.from(mlW) }
 }

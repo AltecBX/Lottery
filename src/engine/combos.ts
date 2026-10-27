@@ -44,7 +44,32 @@ export function buildCombos(
 ): { best: ComboPrediction | null; alts: ComboPrediction[] } {
   const D = state.D
   if (state.K < D || predictions.length < D) return { best: null, alts: [] }
-  const candCount = Math.min(D + 7, predictions.length) // C(12,5)=792, C(13,6)=1716
+  /*
+   * Combinations come from the strongest candidate numbers, inside the reduced
+   * pool when there is one. If the first twelve cannot form enough tickets
+   * inside it, the net widens two numbers at a time — the pool is the stated
+   * promise, so reaching a little further down the ranking is preferred to
+   * breaking it. Only when even the widest net finds nothing does a ticket
+   * outside the pool appear, and it is flagged as such wherever it is shown.
+   */
+  const maxCand = Math.min(D + 13, predictions.length)
+  let candCount = Math.min(D + 7, predictions.length) // C(12,5)=792, C(13,6)=1716
+  for (;;) {
+    const built = buildFrom(state, predictions, candCount, maxCombos, positions, accept)
+    if (!accept || built.inPoolCount >= maxCombos || candCount >= maxCand) return built.result
+    candCount = Math.min(maxCand, candCount + 2)
+  }
+}
+
+function buildFrom(
+  state: HistoryState,
+  predictions: NumberPrediction[],
+  candCount: number,
+  maxCombos: number,
+  positions: PositionAnalysis | null,
+  accept: ((sorted: number[]) => boolean) | null,
+): { result: { best: ComboPrediction | null; alts: ComboPrediction[] }; inPoolCount: number } {
+  const D = state.D
   const cand = predictions.slice(0, candCount)
   const scoreOf = new Map(cand.map((p) => [p.number, p.score]))
   const probOf = new Map(cand.map((p) => [p.number, p.probability]))
@@ -103,7 +128,7 @@ export function buildCombos(
   // be able to silence the prediction entirely.
   const inPool = combos.filter((c) => c.inPool)
   const top = inPool.length >= 1 ? inPool.slice(0, maxCombos) : combos.slice(0, maxCombos)
-  if (top.length === 0) return { best: null, alts: [] }
+  if (top.length === 0) return { result: { best: null, alts: [] }, inPoolCount: 0 }
   const best = top[0]
 
   const toPrediction = (cb: Scored): ComboPrediction => {
@@ -133,9 +158,10 @@ export function buildCombos(
       pairLift: Math.exp(cb.pairAvg),
       sumZ: cb.sumZ,
       notes,
+      ...(accept ? { inPool: cb.inPool, candidates: candCount } : {}),
     }
   }
 
   const list = top.map(toPrediction)
-  return { best: list[0] ?? null, alts: list.slice(1) }
+  return { result: { best: list[0] ?? null, alts: list.slice(1) }, inPoolCount: inPool.length }
 }

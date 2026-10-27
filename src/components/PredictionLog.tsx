@@ -1,5 +1,8 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import type { BacktestPoint, EngineResult } from '../engine/types.ts'
+import type { PredictionSnapshot } from '../engine/snapshots.ts'
+import { METHOD_FROZEN_ON } from '../engine/constraintlab.ts'
+import { SIGNAL_LABEL } from '../engine/signals.ts'
 import { DOW_SHORT, formatDate } from '../engine/dates.ts'
 import { SectionCard, Ball } from './shared.tsx'
 
@@ -21,8 +24,22 @@ const cmpSeq = (a: number[], b: number[]): number => {
  * The learning loop made visible: for every historical draw, what the model
  * (knowing only earlier draws) put in its top-10 — next to what actually hit.
  */
-export function PredictionLog({ res }: { res: EngineResult }) {
+/** Top-10 hits against chance over a set of rows, with the exact hypergeometric error. */
+function vsChance(rows: { hits10: number }[], K: number, D: number) {
+  const n = rows.length
+  const p = D / K
+  const chance = 10 * p
+  const mean = n ? rows.reduce((s, r) => s + r.hits10, 0) / n : 0
+  const sd = Math.sqrt((10 * p * (1 - p) * (K - 10)) / (K - 1) / Math.max(1, n))
+  return { n, mean, chance, z: n ? (mean - chance) / sd : 0 }
+}
+
+const sigma = (z: number) => `${z >= 0 ? '+' : '−'}${Math.abs(z).toFixed(1)}σ`
+const signalName = (k: string) => SIGNAL_LABEL[k]?.short ?? k
+
+export function PredictionLog({ res, snapshots = [] }: { res: EngineResult; snapshots?: PredictionSnapshot[] }) {
   const [page, setPage] = useState(0)
+  const [open, setOpen] = useState<number | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('date')
   const [desc, setDesc] = useState(true)
   const D = res.drawSize
@@ -48,6 +65,23 @@ export function PredictionLog({ res }: { res: EngineResult }) {
       top: [...why].sort((a, b) => b[1] - a[1]),
     }
   }, [points])
+
+  const record = useMemo(() => ({
+    all: vsChance(points, res.K, D),
+    since: vsChance(points.filter((p) => p.date > METHOD_FROZEN_ON), res.K, D),
+  }), [points, res.K, D])
+
+  const byDate = useMemo(() => new Map(snapshots.map((s) => [s.date, s])), [snapshots])
+  const live = useMemo(() => {
+    const settled = points.filter((p) => byDate.has(p.date))
+    let hits = 0, differ = 0
+    for (const p of settled) {
+      const snap = byDate.get(p.date)!
+      hits += snap.top10.filter((n) => p.actual.includes(n)).length
+      if (snap.top10.join() !== p.predictedTop.join()) differ++
+    }
+    return { settled, mean: settled.length ? hits / settled.length : 0, differ }
+  }, [points, byDate])
 
   const all = useMemo(() => {
     const arr = [...points]
@@ -103,6 +137,30 @@ export function PredictionLog({ res }: { res: EngineResult }) {
           )}
         </p>
       )}
+      {points.length > 0 && (
+        <div className="log-summary">
+          <div>
+            <b>Top-10 against chance:</b> {record.all.mean.toFixed(3)} a draw over {record.all.n.toLocaleString()} self-tests,
+            where chance is {record.all.chance.toFixed(3)} ({sigma(record.all.z)}).{' '}
+            {record.since.n > 0
+              ? <>Since the method was frozen on {formatDate(METHOD_FROZEN_ON)}: {record.since.mean.toFixed(3)} over {record.since.n} draws ({sigma(record.since.z)}) — the only rows no design decision has seen.</>
+              : <>Every draw after {formatDate(METHOD_FROZEN_ON)}, when the method was frozen, will be a test nothing here was tuned on; none has been drawn yet.</>}
+          </div>
+          <div>
+            <b>Live predictions:</b>{' '}
+            {live.settled.length > 0
+              ? <>{live.settled.length} kept on this device have been drawn; their top 10 caught {live.mean.toFixed(2)} a draw (chance {record.all.chance.toFixed(2)}).{live.differ > 0 && <> {live.differ} differ from what the current model reproduces — the method changed after they were shown, and the row says so.</>}</>
+              : snapshots.length > 0
+                ? <>{snapshots.length} kept on this device, waiting for their draws.</>
+                : <>from now on, each prediction this device shows is kept as it was, so it can be checked against the draw.</>}
+          </div>
+          <div className="hint">
+            Each row is reproduced by the current model ({res.modelVersion ?? 'this build'}) from the draws before it — exact,
+            and identical every time it is rebuilt. Tap a row for the weights it used, what the last update changed, and the
+            size of the pool at the time.
+          </div>
+        </div>
+      )}
       {hasPool && deep && pool.judged > 0 && (
         <p className="hint" style={{ display: 'block', marginBottom: 10 }}>
           <strong>Deep cut, replayed:</strong> the pool would have held{' '}
@@ -137,11 +195,15 @@ export function PredictionLog({ res }: { res: EngineResult }) {
             {rows.map((p) => {
               const actualSet = new Set(p.actual)
               const predictedSet = new Set(p.predictedTop)
+              const snap = byDate.get(p.date)
+              const isOpen = open === p.index
               return (
-                <tr key={p.index}>
+                <Fragment key={p.index}>
+                <tr className="log-row" onClick={() => setOpen(isOpen ? null : p.index)} aria-expanded={isOpen}>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     {formatDate(p.date)}
                     <span style={{ color: 'var(--muted)', marginLeft: 6, fontSize: 12 }}>{DOW_SHORT[p.dow]}</span>
+                    {snap && <span className="log-live" title="shown live before this draw">live</span>}
                   </td>
                   <td>
                     <span className="pair-cell" style={{ gap: 4, flexWrap: 'wrap' }}>
@@ -190,6 +252,46 @@ export function PredictionLog({ res }: { res: EngineResult }) {
                     {p.hits10}/{D}
                   </td>
                 </tr>
+                {isOpen && (
+                  <tr className="log-detail">
+                    <td colSpan={4 + (hasSpecial ? 1 : 0) + (hasPool ? 1 : 0)}>
+                      <div className="log-detail-body">
+                      <div>
+                        <b>{p.hits10}</b> of {D} in the top 10, where chance expects {record.all.chance.toFixed(2)}
+                        {p.hitsPick > 0 && <> · {p.hitsPick} in the top {D}</>}
+                      </div>
+                      {p.weightsTop && (
+                        p.weightsTop.every(([, w]) => Math.abs(w - p.weightsTop![0][1]) < 1e-9)
+                          ? <div>Every signal weighted equally ({(p.weightsTop[0][1] * 100).toFixed(1)}% each) — none had beaten chance by enough to earn more.</div>
+                          : <div>Heaviest signals: {p.weightsTop.map(([k, w]) => `${signalName(k)} ${(w * 100).toFixed(1)}%`).join(', ')}</div>
+                      )}
+                      {p.weightShift && (
+                        <div>
+                          {p.weightShift.key
+                            ? <>Last update moved {signalName(p.weightShift.key)} by {p.weightShift.delta >= 0 ? '+' : '−'}{Math.abs(p.weightShift.delta * 100).toFixed(2)} points.</>
+                            : <>The last update changed no weight.</>}
+                        </div>
+                      )}
+                      {p.poolShare !== undefined && res.constraintLab && (
+                        <div>
+                          Deep pool at the time: {Math.round(p.poolShare * res.constraintLab.universe).toLocaleString()} main-number
+                          sets ({(p.poolShare * 100).toFixed(1)}% of {res.constraintLab.universe.toLocaleString()})
+                        </div>
+                      )}
+                      {snap && (
+                        <div>
+                          Shown live on {formatDate(snap.savedAt.slice(0, 10))}: top 10 {snap.top10.join(' ')}
+                          {snap.top10.join() !== p.predictedTop.join()
+                            ? <> — not what the current model reproduces; it caught {snap.top10.filter((n) => actualSet.has(n)).length}.</>
+                            : <> — the same ten the current model reproduces.</>}
+                          {snap.version && <span className="hint" style={{ display: 'block' }}>model {snap.version}</span>}
+                        </div>
+                      )}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               )
             })}
             {rows.length === 0 && (

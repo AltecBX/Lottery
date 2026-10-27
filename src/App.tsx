@@ -27,6 +27,8 @@ import { SimilarPanel } from './components/SimilarPanel.tsx'
 import { BacktestPanel } from './components/BacktestPanel.tsx'
 import { HistoryTable } from './components/HistoryTable.tsx'
 import { PredictionLog } from './components/PredictionLog.tsx'
+import { ResearchPanel } from './components/ResearchPanel.tsx'
+import { useSnapshots } from './hooks/useSnapshots.ts'
 import { RealityPanel } from './components/RealityPanel.tsx'
 import { RepeatsPanel } from './components/RepeatsPanel.tsx'
 import { PositionsPanel } from './components/PositionsPanel.tsx'
@@ -52,6 +54,7 @@ const NAV = [
   ['constraints', 'Constraint Lab'],
   ['ranking', 'Ranking'],
   ['log', 'Prediction log'],
+  ['research', 'Research'],
   ['columns', 'Columns'],
   ['repeats', 'Repeats'],
   ['jackpot', 'Jackpot'],
@@ -156,6 +159,7 @@ export default function App() {
     [settings.poolMax, settings.nextDate, settings.specialMax, settings.era, activeGame?.syncKey],
   )
   const { result, computing, error: engineError } = useEngine(draws, engineSettings)
+  const snapshots = useSnapshots(activeGame?.id, activeGame?.syncKey, draws, result, computing)
   // Read inside callbacks that must not re-create themselves on every recompute
   const resultRef = useRef(result)
   resultRef.current = result
@@ -757,7 +761,8 @@ export default function App() {
               <ConstraintLabPanel res={result} draws={draws} />
               <RealityPanel res={result} />
               <RankingTable res={result} />
-              <PredictionLog res={result} />
+              <PredictionLog res={result} snapshots={snapshots} />
+              <ResearchPanel key={`r-${activeGame?.id}-${result.lastDate}`} res={result} draws={draws} ruleKey={activeGame?.syncKey} />
               <PositionsPanel res={result} />
               <RepeatsPanel res={result} />
               <JackpotPanel res={result} draws={draws} pricing={pricing} />
