@@ -24,11 +24,61 @@ export interface HistoryFile {
   count: number
   /** Where each draw came from, for the import summary */
   sources: string[]
+  /** Dates the sources disagreed about, and which reading the file kept */
+  conflicts?: SourceConflict[]
   /** [dateISO, ...mains, special|0, jackpot|0, winnerLocation|''] */
   rows: (string | number)[][]
 }
 
-export function encodeHistory(game: SyncKey, draws: Draw[], sources: string[]): HistoryFile {
+/** Two sources reporting different results for one drawing. */
+export interface SourceConflict {
+  date: string
+  kept: string
+  dropped: string
+}
+
+const reading = (d: Draw): string => `${d.sorted.join('-')}${d.special !== undefined ? ` + ${d.special}` : ''}`
+
+/**
+ * Merge a second source into a first, trusting the first wherever they
+ * disagree, and say where they did.
+ *
+ * This used to be `mergeDraws`, which keys on date and numbers together — so
+ * two sources reporting different results for one drawing both got in. New
+ * York's Mega Millions data gives the 2022-05-10 Mega Ball as 6; Louisiana and
+ * the operator's own record give 9; the published file carried both rows, and
+ * every model trained on it saw a drawing that happened twice. The secondary
+ * source now only fills dates the primary lacks, and only details it lacks.
+ */
+export function mergeSources(primary: Draw[], secondary: Draw[]): { merged: Draw[]; added: number; conflicts: SourceConflict[] } {
+  const merged = primary.map((d) => ({ ...d }))
+  const byDate = new Map<string, Draw>()
+  for (const d of merged) if (!byDate.has(d.date)) byDate.set(d.date, d)
+  const conflicts: SourceConflict[] = []
+  let added = 0
+  for (const d of secondary) {
+    const held = byDate.get(d.date)
+    if (!held) {
+      byDate.set(d.date, d)
+      merged.push(d)
+      added++
+      continue
+    }
+    const sameMains = held.sorted.join('-') === d.sorted.join('-')
+    const sameSpecial = held.special === undefined || d.special === undefined || held.special === d.special
+    if (sameMains && sameSpecial) {
+      if (held.special === undefined && d.special !== undefined) held.special = d.special
+      if (held.jackpot === undefined && d.jackpot !== undefined) held.jackpot = d.jackpot
+      if (held.winnerLocation === undefined && d.winnerLocation !== undefined) held.winnerLocation = d.winnerLocation
+      continue
+    }
+    if (!conflicts.some((c) => c.date === d.date)) conflicts.push({ date: d.date, kept: reading(held), dropped: reading(d) })
+  }
+  merged.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+  return { merged, added, conflicts }
+}
+
+export function encodeHistory(game: SyncKey, draws: Draw[], sources: string[], conflicts: SourceConflict[] = []): HistoryFile {
   const rows = draws.map((d) => [
     d.date,
     ...d.sorted,
@@ -43,6 +93,7 @@ export function encodeHistory(game: SyncKey, draws: Draw[], sources: string[]): 
     last: draws[draws.length - 1]?.date ?? '',
     count: draws.length,
     sources,
+    ...(conflicts.length ? { conflicts } : {}),
     rows,
   }
 }

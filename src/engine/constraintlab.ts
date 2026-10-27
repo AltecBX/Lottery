@@ -6,6 +6,7 @@ import {
 } from './constraints.ts'
 import { detectEra } from './era.ts'
 import { choose } from './odds.ts'
+import { bonferroniZ, poolVsRandom } from './stats.ts'
 
 /** Coverage ladder: each candidate rule is a feature at one of these tail sizes. */
 export const ALPHAS = [0.0005, 0.002, 0.01, 0.03]
@@ -75,37 +76,94 @@ export interface FunnelStep {
   removed: number
 }
 
+/** One re-selection in the replay: rules chosen at `origin` from earlier draws, scored on the draws after. */
+export interface ValidationFold {
+  /** Date of the first draw this selection was scored on; it was chosen from draws before it */
+  origin: string
+  ruleIds: string[]
+  draws: number
+  held: number
+  /** Space the selection kept, measured at the same intervals its survival was tested with */
+  share: number
+}
+
+/**
+ * How a mode's selection procedure did on draws it had not seen.
+ *
+ * The procedure — rank rules, greedily stack them to a survival floor — is
+ * re-run every `REFIT_EVERY` draws using only the draws before that point, and
+ * each selection is scored on the draws that follow until the next one. Every
+ * verdict here therefore comes from a rule set chosen without the draw it is
+ * judged on, and appending draws never changes an earlier verdict.
+ */
+export interface ModeValidation {
+  folds: ValidationFold[]
+  /** First draw scored; '' when the record is too short to score any */
+  from: string
+  draws: number
+  held: number
+  survival: number
+  /** Matched space share over the same draws: what a random pool of this size would hold */
+  share: number
+  /** Standard errors by which `held` beats an equally sized random pool */
+  z: number
+  ciLo: number
+  ciHi: number
+  /** z the best of the modes must reach before any one of them counts (Bonferroni) */
+  zNeeded: number
+  verdict: 'edge' | 'worse' | 'noise' | 'insufficient'
+  /**
+   * Mean Jaccard distance between successive selections: 0 when every refit
+   * chose the same rules, 1 when no two shared one.
+   */
+  turnover: number
+  /** Every scored date the selection in force rejected the winner */
+  failedDates: string[]
+  /**
+   * The draws after the method was frozen — the only ones no design decision in
+   * this file has ever been tuned against. Everything earlier was in view while
+   * the targets, alphas and features were chosen.
+   */
+  prospective: { since: string; draws: number; held: number; share: number; z: number }
+}
+
 export interface ConstraintMode {
   key: 'conservative' | 'balanced' | 'aggressive' | 'deep'
   label: string
-  /** Walk-forward winner survival this mode refuses to go below */
+  /** Walk-forward winner survival this mode refuses to go below on the draws it selects from */
   target: number
+  /** The rules in force now, selected from every evaluated draw */
   ruleIds: string[]
+  /** Space kept by those rules, matched to the intervals their survival was tested at */
   spaceShare: number
+  /**
+   * Share of the space the bands keep at today's intervals — the pool the app
+   * actually deals from, and what `combinationsAfter` counts.
+   */
+  currentShare: number
+  /** In-sample survival of today's selection: chosen on these same draws, so flattered */
   survival: number
   survivalLo: number
   combinationsBefore: number
   combinationsAfter: number
   /** Winners the selection would have thrown away, with their dates */
   eliminated: { date: string; numbers: number[]; failed: string[] }[]
-  /**
-   * Every date this mode's bands rejected the winner, uncapped — `eliminated`
-   * keeps only the first 25 for display. The prediction log replays the pool
-   * against the record and needs all of them.
-   */
+  /** Every date today's selection rejects the winner, in-sample, uncapped */
   failedDates: string[]
   funnel: FunnelStep[]
-  /** survival − spaceShare in standard errors, over the draws used to select */
+  /** survival − spaceShare in standard errors, over the draws used to select — selection-biased */
   edgeZ: number
   /**
-   * Survival on the later half of the record, which the greedy never saw.
-   * The in-sample figure is selection-biased by construction — the optimiser
-   * picked whichever rules happened to spare the most winners — so this is the
-   * number that says whether the selection generalises.
+   * Out-of-sample survival from the replay (`validation`): each draw judged by
+   * a selection made without it. The in-sample figure is selection-biased by
+   * construction, so this is the number that says whether the method works.
    */
   holdoutSurvival: number
   holdoutDraws: number
+  /** Matched space share over the held-out draws — the line `holdoutSurvival` has to beat */
+  holdoutShare: number
   holdoutEdgeZ: number
+  validation: ModeValidation
 }
 
 export interface ConstraintLab {
@@ -166,6 +224,12 @@ export interface ConstraintLab {
   pareto: { spaceShare: number; survival: number; rules: number }[]
   /** Monte Carlo sample size behind every space-share figure */
   sampleSize: number
+  /**
+   * The bars every claim here was held to: how many rules and modes were looked
+   * at, the z each needed, and the date the method stopped being tuned. Optional
+   * only so hand-built labs in tests keep working.
+   */
+  significance?: { ruleTests: number; ruleZ: number; modeTests: number; modeZ: number; frozenOn: string }
   /**
    * The headline finding: does anything here beat the fair-lottery identity
    * that survival must equal space share?
@@ -295,18 +359,35 @@ const passes = (v: number, lo: number, hi: number): boolean => !Number.isFinite(
  * whole history will of course contain the whole history; the question is
  * whether a constraint fitted to the past contains the future.
  */
-export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number): ConstraintLab | null {
+export function analyzeConstraints(
+  allDraws: Draw[], poolMax: number, D: number,
+  opts: { eraStart?: string } = {},
+): ConstraintLab | null {
   // A range is a statement about a machine. Powerball's mains went 59 → 69 in
   // October 2015 and Mega Millions' went 75 → 70 in 2017, so "the 5th number
   // stays under 60" fitted across that boundary describes a machine that no
   // longer exists — and scored against a 69-ball sample it reads as a colossal
   // edge that can never repeat. Whatever the rest of the app is set to analyse,
   // the lab works inside one rule era and says which draws it left out.
-  const eraInfo = detectEra(allDraws)
+  //
+  // For an official game the era comes from the published rule schedule
+  // (`eraStart`), and it is the white-ball era: every feature here is a
+  // property of the five main numbers, so a change to the bonus pool alone —
+  // Mega Millions in 2025 — does not end it.
+  const scheduled = opts.eraStart
+    ? (() => {
+        const idx = allDraws.findIndex((d) => d.date >= opts.eraStart!)
+        if (idx <= 0) return null
+        let earlyMax = 0
+        for (let i = 0; i < idx; i++) for (const n of allDraws[i].sorted) earlyMax = Math.max(earlyMax, n)
+        return { cutoffIndex: idx, cutoffDate: allDraws[idx].date, excluded: idx, kept: allDraws.length - idx, earlyMax, currentMax: poolMax }
+      })()
+    : null
+  const eraInfo = opts.eraStart ? scheduled : detectEra(allDraws)
   const draws = eraInfo ? allDraws.slice(eraInfo.cutoffIndex) : allDraws
   // Only correct the pool when the retired era is what inflated it; a pool that
   // grew leaves today's maximum as the real one, and a manual override stands.
-  const K = eraInfo && eraInfo.earlyMax > eraInfo.currentMax ? eraInfo.currentMax : poolMax
+  const K = !opts.eraStart && eraInfo && eraInfo.earlyMax > eraInfo.currentMax ? eraInfo.currentMax : poolMax
   const eraTrim = eraInfo
     ? {
         cutoffDate: eraInfo.cutoffDate,
@@ -349,6 +430,9 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
   // single context instead makes conditional rules look predictive when they
   // are only being compared against the wrong baseline.
   const spaceAcc = new Float64Array(nRules)
+  // The same sums as running totals, so a selection made at step s can rank
+  // rules by the space they kept over steps 0..s−1 alone.
+  const spaceCum = new Float64Array((draws.length - MIN_CONSTRAINT_HISTORY + 1) * nRules)
   const scratch = ALPHAS.map(() => ({ lo: 0, hi: 0 }))
   const featBuf = new Float64Array(nFeat)
   const words = sample.words
@@ -411,6 +495,7 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
           share = countIn(sample, fi, lo, hi) / sample.size
         }
         spaceAcc[r] += share
+        spaceCum[(step + 1) * nRules + r] = spaceCum[step * nRules + r] + share
       }
     }
     evaluatedIdx.push(i)
@@ -432,6 +517,12 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
 
   const ruleSurvivors: (Uint8Array | null)[] = []
   const rules: ConstraintRule[] = []
+  /*
+   * Every rule is tested, and the table is read for its best — so the bar for
+   * calling one real is the one a family of `nRules` looks needs. At the old
+   * fixed 2σ, a fair machine hands several of 136 rules an "edge" every run.
+   */
+  const ruleZNeeded = bonferroniZ(nRules)
 
   for (let fi = 0; fi < nFeat; fi++) {
     const spec = specs[fi]
@@ -476,12 +567,13 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
       const spaceShare = spaceAcc[r] / evaluated
       const survival = hits / evaluated
       const ci = wilson(hits, evaluated)
-      const se = Math.sqrt(Math.max(1e-12, (spaceShare * (1 - spaceShare)) / evaluated))
-      const edgeZ = (survival - spaceShare) / se
+      // The space share is itself an estimate from one Monte Carlo sample, and
+      // that error is shared by every step, so it counts once in full.
+      const edgeZ = poolVsRandom(hits, evaluated, spaceShare, sample.size).z
       const theory = spec.group === 'position' ? positionIntervalProbability(K, D, fi + 1, lo, hi) : null
       const removes = 1 - spaceShare
 
-      const provenEdge = edgeZ >= 2
+      const provenEdge = edgeZ >= ruleZNeeded
       let tier: RuleTier
       let usable = contextFree
       let note = ''
@@ -496,7 +588,7 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
         note = `Keeps ${(spaceShare * 100).toFixed(2)}% of the arithmetic space.`
       } else if (provenEdge) {
         tier = 'historically-rare'
-        note = `Retains winners ${edgeZ.toFixed(1)}σ above its own space share — a real edge.`
+        note = `Retains winners ${edgeZ.toFixed(1)}σ above its own space share — past the ${ruleZNeeded.toFixed(1)}σ that ${nRules} rules tested at once require.`
       } else {
         // Removing candidates and winners at the same rate is exactly what a
         // fair machine produces. The rule still reduces the space; it just does
@@ -541,7 +633,17 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
     }
   }
 
-  const modes = buildModes(rules, ruleSurvivors, passMatrix, nRules, evaluated, evaluatedIdx, draws, sample, stepIv, universe)
+  const finalLo = new Float64Array(nRules)
+  const finalHi = new Float64Array(nRules)
+  for (let fi = 0; fi < nFeat; fi++) {
+    for (let a = 0; a < ALPHAS.length; a++) {
+      finalLo[fi * ALPHAS.length + a] = finalIv[fi][a].lo
+      finalHi[fi * ALPHAS.length + a] = finalIv[fi][a].hi
+    }
+  }
+  const modes = buildModes({
+    rules, specs, passMatrix, nRules, evaluated, evaluatedIdx, draws, sample, stepIv, spaceCum, finalLo, finalHi, universe,
+  })
   const pareto = buildPareto(rules, ruleSurvivors, passMatrix, nRules, evaluated, sample, stepIv)
 
   // Positions occupy the first D feature slots, in order.
@@ -636,13 +738,14 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
   const usableRules = rules.filter((r) => r.usable)
   const best = [...usableRules].sort((a, b) => b.edgeZ - a.edgeZ)[0]
   // Reporting the strongest rule's z-score without saying whether it cleared the
-  // bar reads as a finding whichever way it fell. Below 2σ it is noise, and the
-  // verdict has to say so in the same breath as the number.
+  // bar reads as a finding whichever way it fell. The bar is the one the whole
+  // family of rules needs — the best of 136 fair coins clears 2σ most of the
+  // time — and the verdict states it in the same breath as the number.
   const verdict = !best
     ? 'No constraint retained winners better than it retained candidates. Every shape filter removed winners at the rate it removed the space — which is precisely what a fair machine produces, and means none of them reduce the search space for free.'
     : best.provenEdge
-      ? `Strongest rule keeps winners ${best.edgeZ.toFixed(1)} standard errors above its own space share (${best.label}, ${(best.spaceShare * 100).toFixed(1)}% of the space kept, ${(best.survival * 100).toFixed(2)}% of unseen winners kept).`
-      : `Nothing beat the fair line. The strongest of ${usableRules.length} usable rules (${best.label}) reached only ${best.edgeZ.toFixed(1)}σ above its own space share, which is inside what a fair machine produces by chance — so every one of them removes winners at the rate it removes candidates.`
+      ? `Strongest rule keeps winners ${best.edgeZ.toFixed(1)} standard errors above its own space share (${best.label}, ${(best.spaceShare * 100).toFixed(1)}% of the space kept, ${(best.survival * 100).toFixed(2)}% of unseen winners kept) — past the ${ruleZNeeded.toFixed(1)}σ that ${nRules} rules tested at once require.`
+      : `Nothing beat the fair line. The strongest of ${usableRules.length} usable rules (${best.label}) reached ${best.edgeZ.toFixed(1)}σ above its own space share; with ${nRules} rules tested at once, a real edge needs ${ruleZNeeded.toFixed(1)}σ, and the best of that many on a fair machine routinely lands where this one did — so every one of them removes winners at the rate it removes candidates.`
 
   rules.sort((a, b) => Number(b.usable) - Number(a.usable) || b.edgeZ - a.edgeZ)
 
@@ -650,6 +753,13 @@ export function analyzeConstraints(allDraws: Draw[], poolMax: number, D: number)
     K, drawSize: D, universe, evaluated, eraTrim, positionBands, presets, sumRecord, rejected, fairness,
     cuts: cutStatus(allDraws, K, D),
     rules, modes, pareto, sampleSize: sample.size, verdict,
+    significance: {
+      ruleTests: nRules,
+      ruleZ: ruleZNeeded,
+      modeTests: MODE_TARGETS.length,
+      modeZ: bonferroniZ(MODE_TARGETS.length),
+      frozenOn: METHOD_FROZEN_ON,
+    },
   }
 }
 
@@ -1512,133 +1622,343 @@ const MODE_TARGETS: { key: ConstraintMode['key']; label: string; target: number 
   { key: 'deep', label: 'Deep cut', target: 0.68 },
 ]
 
+/** Draws the first replay selection learns from before any draw is scored against it. */
+export const FIRST_ORIGIN_STEPS = 200
+
 /**
- * Greedily assemble the strongest selection that still clears a survival floor.
- *
- * Candidates are tried best-edge first, and one is kept only if the joint
- * walk-forward survival stays at or above the target after adding it. Rules
- * that failed their own edge test are never offered.
+ * Draws between re-selections in the replay — about a year of a twice-weekly
+ * game. Fixed in absolute steps from the start of the era, so appending draws
+ * only ever adds folds: no earlier selection, and no earlier verdict, moves.
  */
-function buildModes(
-  rules: ConstraintRule[],
-  ruleSurvivors: (Uint8Array | null)[],
-  passMatrix: Uint8Array,
-  nRules: number,
-  evaluated: number,
-  evaluatedIdx: number[],
-  draws: Draw[],
-  sample: UniverseSample,
-  stepIv: StepIntervals,
-  universe: number,
-): ConstraintMode[] {
-  const sampleSize = sample.size
-  // Ranked by how much space each removes on its own; the greedy step below
-  // decides what that costs in winners.
-  const candidates = rules
-    .map((r, i) => ({ r, i }))
-    .filter(({ r }) => r.usable)
-    .sort((a, b) => a.r.spaceShare - b.r.spaceShare)
-    .slice(0, 40)
+export const REFIT_EVERY = 100
+
+/**
+ * The day this method stopped being tuned. The targets, alphas, feature list
+ * and replay design were all chosen with the record up to here in view, so the
+ * replay before it is validation, not a clean test. Draws after it are the only
+ * ones nothing in this file was ever fitted to — and they are reported apart.
+ */
+export const METHOD_FROZEN_ON = '2026-10-27'
+
+/** Everything the walk-forward pass recorded, as the selection needs it. */
+interface WalkRecord {
+  rules: ConstraintRule[]
+  specs: FeatureSpec[]
+  passMatrix: Uint8Array
+  nRules: number
+  evaluated: number
+  evaluatedIdx: number[]
+  draws: Draw[]
+  sample: UniverseSample
+  stepIv: StepIntervals
+  /** Running per-rule space-share totals: [s·nRules + r] sums steps 0..s−1 */
+  spaceCum: Float64Array
+  /** Intervals fitted on the whole era — what is in force today */
+  finalLo: Float64Array
+  finalHi: Float64Array
+  universe: number
+}
+
+/**
+ * The pass matrix again, one bit per step, rule-major: [r·words + ⌊step/32⌋].
+ * The greedy asks "how many steps does this conjunction keep?" dozens of times
+ * per refit and a dozen refits per run; 32 steps to a popcount makes that
+ * cheap enough to re-select at every origin on a phone.
+ */
+function packPasses(w: WalkRecord): { bits: Uint32Array; words: number } {
+  const words = Math.ceil(w.evaluated / 32)
+  const bits = new Uint32Array(w.nRules * words)
+  for (let step = 0; step < w.evaluated; step++) {
+    const row = step * w.nRules
+    for (let r = 0; r < w.nRules; r++) if (w.passMatrix[row + r]) bits[r * words + (step >>> 5)] |= 1 << (step & 31)
+  }
+  return { bits, words }
+}
+
+/** All ones over the first `n` bits, zero after — the live set before anything is cut. */
+function onesBits(n: number): Uint32Array {
+  const out = new Uint32Array(Math.ceil(n / 32)).fill(0xffffffff)
+  if (n % 32) out[out.length - 1] = ((1 << (n % 32)) - 1) >>> 0
+  return out
+}
+
+/** What a selection made just before step `split` could see. */
+interface SelectionView {
+  split: number
+  candidates: number[]
+  /** Each candidate's interval as it stood at `split`, applied to the sample, one bit per combination */
+  masks: Map<number, Uint32Array>
+}
+
+/**
+ * The candidates a selection made just before step `split` could know about:
+ * which rules were eligible, how much space each had kept so far, and each
+ * one's interval as it stood then. At `split = evaluated` this is today.
+ *
+ * The selection used to rank candidates by their full-record space share and
+ * price them at end-of-record intervals, while scoring itself on the record's
+ * second half — so the draws it was judged on had already shaped what it
+ * chose. Swapping only those draws for fresh random ones changed every mode's
+ * rule set in both games. Nothing here reads a step at or after `split`.
+ */
+function selectionView(w: WalkRecord, split: number): SelectionView {
+  const today = split >= w.evaluated
+  const ivAt = (r: number) => today
+    ? { lo: w.finalLo[r], hi: w.finalHi[r] }
+    : { lo: w.stepIv.lo[split * w.nRules + r], hi: w.stepIv.hi[split * w.nRules + r] }
+  const ranked: { r: number; share: number }[] = []
+  for (let r = 0; r < w.nRules; r++) {
+    const spec = w.specs[w.stepIv.featOfRule[r]]
+    // Only context-free rules combine: their membership does not move with the previous draw
+    if (spec.conditional) continue
+    const { lo, hi } = ivAt(r)
+    if (lo <= spec.hardMin && hi >= spec.hardMax) continue
+    const share = w.spaceCum[split * w.nRules + r] / split
+    if (1 - share < 0.001) continue
+    ranked.push({ r, share })
+  }
+  // Ranked by how much space each removes on its own; the greedy step decides
+  // what that costs in winners.
+  ranked.sort((a, b) => a.share - b.share || a.r - b.r)
+  const candidates = ranked.slice(0, 40).map((c) => c.r)
+  const masks = new Map<number, Uint32Array>()
+  for (const r of candidates) {
+    const vals = w.sample.values[w.stepIv.featOfRule[r]]
+    const { lo, hi } = ivAt(r)
+    const m = new Uint32Array(Math.ceil(w.sample.size / 32))
+    for (let s = 0; s < w.sample.size; s++) if (passes(vals[s], lo, hi)) m[s >>> 5] |= 1 << (s & 31)
+    masks.set(r, m)
+  }
+  return { split, candidates, masks }
+}
+
+/**
+ * Greedily assemble the strongest selection that still clears a survival floor
+ * on the steps before the view's split.
+ *
+ * Candidates are tried in order, and one is kept only if joint walk-forward
+ * survival stays at or above the target after adding it. The joint state is
+ * carried incrementally — one survivor mask over the sample, one pass mask over
+ * the steps — so trying a candidate is a single AND-and-count against each,
+ * which is what keeps the deep setting affordable at every refit.
+ */
+function greedySelect(
+  w: WalkRecord, packed: { bits: Uint32Array; words: number }, view: SelectionView, target: number,
+): { chosen: number[]; path: { spaceShare: number; survival: number }[] } {
+  const S = w.sample.size
+  const n = view.split
+  const aliveS = onesBits(S)
+  const aliveH = onesBits(n)
+  const chosen: number[] = []
+  const path: { spaceShare: number; survival: number }[] = []
+  const taken = new Set<number>()
+  let current = { survival: 1, spaceShare: 1 }
+  for (;;) {
+    let bestIdx = -1
+    let bestRes: { survival: number; spaceShare: number } | null = null
+    let bestScore = 0
+    for (const i of view.candidates) {
+      if (taken.has(i)) continue
+      const mask = view.masks.get(i)!
+      let kept = 0
+      for (let k = 0; k < aliveS.length; k++) kept += popcount(aliveS[k] & mask[k])
+      let hits = 0
+      const base = i * packed.words
+      for (let k = 0; k < aliveH.length; k++) hits += popcount(aliveH[k] & packed.bits[base + k])
+      const res = { survival: n > 0 ? hits / n : 1, spaceShare: kept / S }
+      if (res.survival < target) continue
+      const gain = current.spaceShare - res.spaceShare
+      if (gain <= 1e-6) continue
+      // Space removed per winner surrendered — the only trade that matters
+      const cost = Math.max(1e-4, current.survival - res.survival)
+      const score = gain / cost
+      if (score > bestScore) { bestScore = score; bestIdx = i; bestRes = res }
+    }
+    if (bestIdx < 0 || !bestRes) break
+    const chosenMask = view.masks.get(bestIdx)!
+    for (let k = 0; k < aliveS.length; k++) aliveS[k] &= chosenMask[k]
+    const base = bestIdx * packed.words
+    for (let k = 0; k < aliveH.length; k++) aliveH[k] &= packed.bits[base + k]
+    chosen.push(bestIdx)
+    taken.add(bestIdx)
+    path.push(bestRes)
+    current = bestRes
+  }
+  return { chosen, path }
+}
+
+/** Steps at which the replay re-selects: fixed from the era's start, so they never move. */
+export function replayOrigins(evaluated: number): number[] {
+  const out: number[] = []
+  for (let o = FIRST_ORIGIN_STEPS; o < evaluated; o += REFIT_EVERY) out.push(o)
+  return out
+}
+
+const allPass = (w: WalkRecord, chosen: number[], step: number): boolean => {
+  for (const r of chosen) if (!w.passMatrix[step * w.nRules + r]) return false
+  return true
+}
+
+/**
+ * Nested chronological validation of one mode: re-run the whole selection at
+ * every origin from the draws before it, score it on the draws up to the next
+ * origin, and pool the verdicts. This tests the procedure the app runs — choose
+ * from everything known, deal from the result — rather than one rule set that
+ * was chosen with the answers in view.
+ */
+function validateMode(
+  w: WalkRecord, packed: { bits: Uint32Array; words: number }, views: SelectionView[], target: number,
+): { validation: ModeValidation; eliminated: ConstraintMode['eliminated'] } {
+  const S = w.sample.size
+  const zNeeded = bonferroniZ(MODE_TARGETS.length)
+  const folds: ValidationFold[] = []
+  const failedDates: string[] = []
+  const eliminated: ConstraintMode['eliminated'] = []
+  let held = 0, n = 0, expected = 0
+  let pHeld = 0, pN = 0, pExpected = 0
+  const sets: Set<number>[] = []
+  for (let k = 0; k < views.length; k++) {
+    const from = views[k].split
+    const to = k + 1 < views.length ? views[k + 1].split : w.evaluated
+    const { chosen } = greedySelect(w, packed, views[k], target)
+    sets.push(new Set(chosen))
+    const stride = Math.max(1, Math.round((to - from) / 50), Math.round(((to - from) * chosen.length) / 600))
+    const share = chosen.length
+      ? matchedPrefixShares(chosen, w.stepIv, w.sample, w.nRules, from, to, stride).prefix[chosen.length - 1]
+      : 1
+    let foldHeld = 0
+    for (let step = from; step < to; step++) {
+      const d = w.draws[w.evaluatedIdx[step]]
+      const ok = allPass(w, chosen, step)
+      if (ok) foldHeld++
+      else {
+        failedDates.push(d.date)
+        eliminated.push({
+          date: d.date,
+          numbers: d.sorted,
+          failed: chosen.filter((r) => !w.passMatrix[step * w.nRules + r]).map((r) => w.rules[r].label),
+        })
+      }
+      if (d.date > METHOD_FROZEN_ON) { pN++; pHeld += ok ? 1 : 0; pExpected += share }
+    }
+    folds.push({ origin: w.draws[w.evaluatedIdx[from]].date, ruleIds: chosen.map((r) => w.rules[r].id), draws: to - from, held: foldHeld, share })
+    held += foldHeld
+    n += to - from
+    expected += share * (to - from)
+  }
+
+  // Pooling the folds at their average share overstates the variance a little
+  // (each fold's own share is closer to its draws), so the z errs towards noise.
+  const share = n ? expected / n : 1
+  const test = poolVsRandom(held, n, share, S)
+  const pShare = pN ? pExpected / pN : 1
+  let turnover = 0
+  for (let k = 1; k < sets.length; k++) {
+    const a = sets[k - 1], b = sets[k]
+    let inter = 0
+    for (const r of a) if (b.has(r)) inter++
+    const union = a.size + b.size - inter
+    turnover += union ? 1 - inter / union : 0
+  }
+  return {
+    validation: {
+      folds,
+      from: folds.length ? folds[0].origin : '',
+      draws: n,
+      held,
+      survival: n ? held / n : 1,
+      share,
+      z: n ? test.z : 0,
+      ciLo: test.ciLo,
+      ciHi: test.ciHi,
+      zNeeded,
+      verdict: n < 100 ? 'insufficient' : test.z >= zNeeded ? 'edge' : test.z <= -zNeeded ? 'worse' : 'noise',
+      turnover: sets.length > 1 ? turnover / (sets.length - 1) : 0,
+      failedDates,
+      prospective: {
+        since: METHOD_FROZEN_ON,
+        draws: pN,
+        held: pHeld,
+        share: pShare,
+        z: pN ? poolVsRandom(pHeld, pN, pShare, S).z : 0,
+      },
+    },
+    // Most recent first: the latest misses say most about the pool in use now
+    eliminated: eliminated.slice(-25).reverse(),
+  }
+}
+
+/**
+ * Today's selection for every mode, plus the replay that says whether the way
+ * it was chosen holds up on draws it never saw.
+ *
+ * Today's rules are chosen from every evaluated draw — the same procedure the
+ * replay re-runs at each origin — so the figure to trust is the replay's, and
+ * the in-sample survival beside it is reported as exactly that.
+ */
+function buildModes(w: WalkRecord): ConstraintMode[] {
+  const S = w.sample.size
+  const origins = replayOrigins(w.evaluated)
+  const views = origins.map((o) => selectionView(w, o))
+  const today = selectionView(w, w.evaluated)
+  const packed = packPasses(w)
 
   return MODE_TARGETS.map(({ key, label, target }) => {
-    const chosen: number[] = []
-    const funnel: FunnelStep[] = []
-    // Select on the first half only; the second half stays unseen so the
-    // selection can be judged rather than admired.
-    const half = Math.floor(evaluated / 2)
-    let current = { survival: 1, spaceShare: 1 }
-    const taken = new Set<number>()
+    const { chosen, path } = greedySelect(w, packed, today, target)
+    const funnel: FunnelStep[] = chosen.map((r, k) => ({
+      ruleId: w.rules[r].id,
+      label: w.rules[r].label,
+      spaceShare: path[k].spaceShare,
+      survival: path[k].survival,
+      removed: (k > 0 ? path[k - 1].spaceShare : 1) - path[k].spaceShare,
+    }))
 
-    // The joint state is carried incrementally: one survivor mask over the
-    // sample and one pass mask over the first-half steps. Trying a candidate is
-    // then a single AND-and-count against each, not a from-scratch rebuild of
-    // the whole conjunction — which is what makes the deep setting affordable,
-    // since its greedy runs to dozens of rules over dozens of candidates.
-    const aliveS = new Uint8Array(sampleSize).fill(1)
-    const aliveH = new Uint8Array(half).fill(1)
-    for (;;) {
-      let bestIdx = -1
-      let bestRes: { survival: number; spaceShare: number } | null = null
-      let bestScore = 0
-      for (const { i } of candidates) {
-        if (taken.has(i)) continue
-        const mask = ruleSurvivors[i]
-        let kept = 0
-        if (mask) {
-          for (let s = 0; s < sampleSize; s++) kept += aliveS[s] & mask[s]
-        } else {
-          for (let s = 0; s < sampleSize; s++) kept += aliveS[s]
-        }
-        let hits = 0
-        for (let step = 0; step < half; step++) hits += aliveH[step] & passMatrix[step * nRules + i]
-        const res = { survival: half > 0 ? hits / half : 1, spaceShare: kept / sampleSize }
-        if (res.survival < target) continue
-        const gain = current.spaceShare - res.spaceShare
-        if (gain <= 1e-6) continue
-        // Space removed per winner surrendered — the only trade that matters
-        const cost = Math.max(1e-4, current.survival - res.survival)
-        const score = gain / cost
-        if (score > bestScore) { bestScore = score; bestIdx = i; bestRes = res }
-      }
-      if (bestIdx < 0 || !bestRes) break
-      const chosenMask = ruleSurvivors[bestIdx]
-      if (chosenMask) for (let s = 0; s < sampleSize; s++) aliveS[s] &= chosenMask[s]
-      for (let step = 0; step < half; step++) aliveH[step] &= passMatrix[step * nRules + bestIdx]
-      chosen.push(bestIdx)
-      taken.add(bestIdx)
-      funnel.push({
-        ruleId: rules[bestIdx].id,
-        label: rules[bestIdx].label,
-        spaceShare: bestRes.spaceShare,
-        survival: bestRes.survival,
-        removed: current.spaceShare - bestRes.spaceShare,
-      })
-      current = bestRes
+    let hits = 0
+    const failedSteps: number[] = []
+    for (let step = 0; step < w.evaluated; step++) {
+      if (allPass(w, chosen, step)) hits++
+      else failedSteps.push(step)
     }
+    const live = onesBits(S)
+    for (const r of chosen) {
+      const m = today.masks.get(r)!
+      for (let k = 0; k < live.length; k++) live[k] &= m[k]
+    }
+    let kept = 0
+    for (let k = 0; k < live.length; k++) kept += popcount(live[k])
+    const currentShare = kept / S
 
-    const holdout = evaluateSet(chosen, ruleSurvivors, passMatrix, nRules, evaluated, sampleSize, half)
-    const full = evaluateSet(chosen, ruleSurvivors, passMatrix, nRules, evaluated, sampleSize)
-
-    // Re-measure the space against the walk-forward intervals, in-sample and
-    // held-out separately, so each survival figure is compared with the share
-    // its own rules were keeping at the time.
-    const stride = strideFor(evaluated, Math.max(1, chosen.length))
-    const inS = matchedPrefixShares(chosen, stepIv, sample, nRules, 0, half, stride)
-    const outS = matchedPrefixShares(chosen, stepIv, sample, nRules, half, evaluated, stride)
-    const last = chosen.length - 1
-    const inShare = chosen.length ? inS.prefix[last] : 1
-    const outShare = chosen.length ? outS.prefix[last] : 1
-    const totalSteps = Math.max(1, inS.steps + outS.steps)
-    const prefixAll = chosen.map((_, k) => (inS.prefix[k] * inS.steps + outS.prefix[k] * outS.steps) / totalSteps)
-    const spaceShare = chosen.length ? prefixAll[last] : 1
+    // Re-measure the space against the walk-forward intervals, so the in-sample
+    // survival is compared with the share its own rules were keeping at the time.
+    const stride = strideFor(w.evaluated, Math.max(1, chosen.length))
+    const matched = chosen.length
+      ? matchedPrefixShares(chosen, w.stepIv, w.sample, w.nRules, 0, w.evaluated, stride).prefix
+      : []
+    const spaceShare = chosen.length ? matched[chosen.length - 1] : 1
     for (let k = 0; k < funnel.length; k++) {
-      funnel[k].spaceShare = prefixAll[k]
-      funnel[k].removed = (k > 0 ? prefixAll[k - 1] : 1) - prefixAll[k]
+      funnel[k].spaceShare = matched[k]
+      funnel[k].removed = (k > 0 ? matched[k - 1] : 1) - matched[k]
     }
 
-    const se = Math.sqrt(Math.max(1e-12, (inShare * (1 - inShare)) / Math.max(1, half)))
-    const seOut = Math.sqrt(Math.max(1e-12, (outShare * (1 - outShare)) / Math.max(1, holdout.n)))
-    const eliminated = full.failedSteps.slice(0, 25).map((step) => {
-      const d = draws[evaluatedIdx[step]]
-      const failed = chosen.filter((r) => !passMatrix[step * nRules + r]).map((r) => rules[r].label)
-      return { date: d.date, numbers: d.sorted, failed }
-    })
-
+    const { validation, eliminated } = validateMode(w, packed, views, target)
     return {
       key, label, target,
-      ruleIds: chosen.map((i) => rules[i].id),
+      ruleIds: chosen.map((r) => w.rules[r].id),
       spaceShare,
-      survival: full.survival,
-      survivalLo: wilson(Math.round(full.survival * evaluated), evaluated).lo,
-      combinationsBefore: universe,
-      combinationsAfter: Math.round(universe * spaceShare),
+      currentShare,
+      survival: hits / w.evaluated,
+      survivalLo: wilson(hits, w.evaluated).lo,
+      combinationsBefore: w.universe,
+      combinationsAfter: Math.round(w.universe * currentShare),
       eliminated,
-      failedDates: full.failedSteps.map((step) => draws[evaluatedIdx[step]].date),
+      failedDates: failedSteps.map((step) => w.draws[w.evaluatedIdx[step]].date),
       funnel,
-      edgeZ: (current.survival - inShare) / se,
-      holdoutSurvival: holdout.survival,
-      holdoutDraws: holdout.n,
-      holdoutEdgeZ: (holdout.survival - outShare) / seOut,
+      edgeZ: poolVsRandom(hits, w.evaluated, spaceShare, S).z,
+      holdoutSurvival: validation.survival,
+      holdoutDraws: validation.draws,
+      holdoutShare: validation.share,
+      holdoutEdgeZ: validation.z,
+      validation,
     }
   })
 }
@@ -1885,12 +2205,23 @@ export function poolWalkForward(
   allDraws: Draw[],
 ): PoolVerdict[] {
   const D = lab.drawSize
-  const eraInfo = detectEra(allDraws)
+  // Slice exactly where the lab did — re-detecting here could disagree with a
+  // scheduled boundary and misalign every verdict by the difference.
+  const cut = lab.eraTrim ? allDraws.findIndex((d) => d.date >= lab.eraTrim!.cutoffDate) : 0
+  const eraInfo = lab.eraTrim && cut > 0 ? { cutoffIndex: cut } : null
   const draws = eraInfo ? allDraws.slice(eraInfo.cutoffIndex) : allDraws
-  const bandFailed = new Set(mode.failedDates)
-  // failedDates marks only the failures, so the warm-up length comes from the
-  // lab instead: `evaluated` draws were judged, ending at the most recent.
-  const firstJudged = Math.max(0, draws.length - lab.evaluated)
+  /*
+   * The bands are judged by the replay: each draw against the rules selected
+   * before it. Today's selection was chosen on these same draws, so scoring the
+   * record with it — as this once did — counts every draw it was fitted to as a
+   * success it predicted. Draws before the first replay origin were only ever
+   * selected from, never tested, so they get no verdict.
+   */
+  const bandFailed = new Set(mode.validation.failedDates)
+  const firstScored = mode.validation.from
+    ? draws.findIndex((d) => d.date >= mode.validation.from)
+    : -1
+  const firstJudged = firstScored < 0 ? draws.length : firstScored
   const judged = new Set<string>()
 
   /*
@@ -1922,7 +2253,7 @@ export function poolWalkForward(
       if (bandFailed.has(d.date)) cutBy = `${mode.label} shape bands`
       else if (seen.has(key)) cutBy = 'already drawn'
       else if (s[D - 2] <= 5 || s[D - 1] <= 9) cutBy = 'position floor'
-      else if (i > firstJudged && (total <= lo || total >= hi)) cutBy = 'record total'
+      else if (i > 0 && (total <= lo || total >= hi)) cutBy = 'record total'
       else {
         const fam = families.find((f) => stillCut(f.key, drawnBefore.get(f.key)!) && f.test(s))
         if (fam) cutBy = fam.label
@@ -2030,9 +2361,15 @@ export function reductionLedger(
   }
 
   if (modeRuleCount > 0) {
-    const removed = Math.round(start * (1 - mode.spaceShare))
+    // Today's bands at today's intervals — the same test `passesMode` applies
+    // to every row below, so the rows stay consistent with each other.
+    const removed = Math.round(start * (1 - mode.currentShare))
+    const v = mode.validation
     push('mode', `${mode.label} shape bands (${modeRuleCount} rules, tested walk-forward)`, removed,
-      `kept ${(mode.survival * 100).toFixed(2)}% of ${lab.evaluated.toLocaleString()} unseen winners`, false)
+      v.draws > 0
+        ? `kept ${(v.survival * 100).toFixed(2)}% of ${v.draws.toLocaleString()} winners it had not been chosen on, where a random pool this size keeps ${(v.share * 100).toFixed(2)}%`
+        : `kept ${(mode.survival * 100).toFixed(2)}% of the ${lab.evaluated.toLocaleString()} winners it was chosen on — too little history to test it on any others`,
+      false)
   }
 
   // Every main-set already drawn, retired with every bonus ball — counting only
@@ -2190,7 +2527,7 @@ export function reductionLedger(
     rows,
     remaining,
     remainingShare: remaining / start,
-    winnersKept: modeRuleCount ? mode.survival : 1,
+    winnersKept: !modeRuleCount ? 1 : mode.validation.draws > 0 ? mode.validation.survival : mode.survival,
     bonusBackToBack,
     mainRepeats,
     repeatExample,

@@ -432,6 +432,38 @@ export function mergeDraws(existing: Draw[], incoming: Draw[]): { merged: Draw[]
   return { merged, added, skipped }
 }
 
+/**
+ * Bring a stored history in line with the official record: every date the
+ * record holds takes the record's result, and anything stored for a date it
+ * does not hold — a result added by hand ahead of the sync — is kept.
+ *
+ * `mergeDraws` alone never removes anything, so a wrong row, once synced,
+ * stayed on the phone for good: the 2022-05-10 Mega Millions draw with New
+ * York's Mega Ball 6 sat beside the correct 9 even after the published file
+ * was fixed. The official record is authoritative for its own dates.
+ */
+export function reconcileDraws(existing: Draw[], official: Draw[]): { merged: Draw[]; added: number; corrected: string[] } {
+  const key = (d: Draw) => `${d.sorted.join(',')}|${d.special ?? ''}`
+  const officialByDate = new Map<string, Set<string>>()
+  for (const d of official) {
+    const set = officialByDate.get(d.date) ?? new Set<string>()
+    set.add(key(d))
+    officialByDate.set(d.date, set)
+  }
+  const storedDates = new Set(existing.map((d) => d.date))
+  const corrected = new Set<string>()
+  const kept = existing.filter((d) => {
+    const keys = officialByDate.get(d.date)
+    if (!keys || keys.has(key(d))) return true
+    corrected.add(d.date)
+    return false
+  })
+  const { merged } = mergeDraws(kept, official)
+  let added = 0
+  for (const date of officialByDate.keys()) if (!storedDates.has(date)) added++
+  return { merged, added, corrected: [...corrected].sort() }
+}
+
 /** Serialize history back to CSV for export. */
 export function drawsToCsv(draws: Draw[]): string {
   const n = draws.length > 0 ? draws[0].numbers.length : 5

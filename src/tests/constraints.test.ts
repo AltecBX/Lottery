@@ -7,6 +7,7 @@ import {
   adjacencyAtLeast, analyzeConstraints, clusteredCombos, countRthAtMost, MIN_CONSTRAINT_HISTORY,
   activeCuts, CHOSEN_CUTS, CUT_FAMILIES, cutStatus, MAX_CUT_STEP, stillCut, narrowGroups, POOL_CUTS, poolWalkForward, reducedPoolAcceptor, reductionLedger, sameDigitCount, sampleUniverse, structuralFamilies,
   positionBandCount, sumAtMostCount, sumBoundedCombos, windowCount,
+  FIRST_ORIGIN_STEPS, modePredicate, REFIT_EVERY, replayOrigins, SAMPLE_SIZE,
 } from '../engine/constraintlab.ts'
 import { orderStatPmf } from '../engine/positions.ts'
 import { choose } from '../engine/odds.ts'
@@ -331,15 +332,19 @@ describe('fair synthetic data must not manufacture an edge', () => {
 
   it('never reports a mode that cuts space for free', () => {
     for (const mode of lab.modes) {
-      if (mode.ruleIds.length === 0) continue
-      // 2σ is the threshold the panel uses to call an edge real, so on fair
-      // draws no mode may reach it in either direction.
-      expect(Math.abs(mode.holdoutEdgeZ)).toBeLessThan(2)
-      // The identity has to hold on the draws the optimiser never saw. Checking
-      // the full record instead would be measuring the greedy's own selection
-      // bias, which is real, expected, and reported separately below.
-      const seOut = Math.sqrt((mode.spaceShare * (1 - mode.spaceShare)) / Math.max(1, mode.holdoutDraws))
-      expect(Math.abs(mode.holdoutSurvival - mode.spaceShare)).toBeLessThan(3 * seOut + 0.005)
+      const v = mode.validation
+      expect(v.draws).toBeGreaterThan(0)
+      // The bar the panel uses to call an edge real, with all four modes counted:
+      // on fair draws no mode may reach it in either direction.
+      expect(v.verdict).not.toBe('edge')
+      expect(Math.abs(v.z)).toBeLessThan(v.zNeeded)
+      // The identity has to hold on the draws each selection never saw, against
+      // the space those same selections kept on those same draws. Checking the
+      // full record instead would be measuring the greedy's own selection bias,
+      // which is real, expected, and reported separately below.
+      expect(mode.holdoutShare).toBe(v.share)
+      const sd = Math.sqrt((v.share * (1 - v.share)) / v.draws)
+      expect(Math.abs(v.survival - v.share)).toBeLessThan(3 * sd + 0.005)
     }
   })
 
@@ -370,6 +375,115 @@ describe('fair synthetic data must not manufacture an edge', () => {
   it('states plainly when nothing beat the fair line', () => {
     const proven = lab.rules.filter((r) => r.provenEdge)
     if (proven.length === 0) expect(lab.verdict).toMatch(/fair machine|No constraint/i)
+  })
+})
+
+/** The same dates with every draw from `from` on replaced by fresh fair draws. */
+function replaceFrom(draws: Draw[], from: number, seed: number): Draw[] {
+  const fresh = fairDraws(draws.length - from, seed)
+  return draws.map((d, i) => (i < from ? d : { ...fresh[i - from], date: d.date, dow: d.dow }))
+}
+
+describe('model selection cannot see the draws it is scored on', () => {
+  const draws = fairDraws(900, 4242)
+  const lab = analyzeConstraints(draws, K, D)!
+
+  it('keeps every scored selection fixed when only the draws it is scored on change', () => {
+    /*
+     * The defect this pins. Modes were selected on the first half of the record
+     * and scored on the second — but candidates were ranked by full-record space
+     * share and priced at end-of-record intervals, so the "held-out" half helped
+     * choose the rules it then judged. On the published Powerball and Mega
+     * Millions histories, replacing only the held-out draws with fresh random
+     * ones changed the selected rules of all four modes in both games.
+     *
+     * Now every scored selection is made at a replay origin from earlier draws.
+     * Replace everything from the third origin on: the first three selections
+     * must not move, and neither may any verdict on a draw before the change.
+     */
+    const origins = replayOrigins(lab.evaluated)
+    expect(origins.slice(0, 3)).toEqual([FIRST_ORIGIN_STEPS, FIRST_ORIGIN_STEPS + REFIT_EVERY, FIRST_ORIGIN_STEPS + 2 * REFIT_EVERY])
+    const cut = MIN_CONSTRAINT_HISTORY + origins[2]
+    const altered = replaceFrom(draws, cut, 777)
+    const lab2 = analyzeConstraints(altered, K, D)!
+    let changedLater = 0
+    for (const mode of lab.modes) {
+      const m2 = lab2.modes.find((m) => m.key === mode.key)!
+      for (let k = 0; k < 3; k++) {
+        expect(m2.validation.folds[k].origin).toBe(mode.validation.folds[k].origin)
+        expect(m2.validation.folds[k].ruleIds).toEqual(mode.validation.folds[k].ruleIds)
+      }
+      // Folds scored entirely before the change keep their verdicts too
+      for (let k = 0; k < 2; k++) expect(m2.validation.folds[k].held).toBe(mode.validation.folds[k].held)
+      const before = (dates: string[]) => dates.filter((d) => d < draws[cut].date)
+      expect(before(m2.validation.failedDates)).toEqual(before(mode.validation.failedDates))
+      // The probe has teeth: the later selections do see the new draws
+      for (let k = 3; k < mode.validation.folds.length; k++) {
+        if (m2.validation.folds[k].ruleIds.join() !== mode.validation.folds[k].ruleIds.join()) changedLater++
+      }
+    }
+    expect(changedLater).toBeGreaterThan(0)
+  })
+
+  it('never changes an earlier verdict when newer draws arrive', () => {
+    // Deterministic reproduction rather than snapshots: a verdict is a pure
+    // function of the draws before it, so the log can be rebuilt at any time
+    // and will say what it said then.
+    const short = analyzeConstraints(draws.slice(0, 760), K, D)!
+    for (const mode of short.modes) {
+      const full = lab.modes.find((m) => m.key === mode.key)!
+      const shared = mode.validation.folds.length
+      for (let k = 0; k < shared; k++) expect(full.validation.folds[k].ruleIds).toEqual(mode.validation.folds[k].ruleIds)
+      expect(full.validation.failedDates.filter((d) => d <= draws[759].date)).toEqual(mode.validation.failedDates)
+    }
+  })
+
+  it('holds a lone rule to the bar its family of tests requires', () => {
+    const sig = lab.significance!
+    expect(sig.ruleTests).toBe(lab.rules.length)
+    // 136 looks at a 5% family-wise error put the bar near 3.4σ, not 2σ
+    expect(sig.ruleZ).toBeGreaterThan(3.2)
+    expect(sig.modeZ).toBeGreaterThan(2.2)
+    for (const r of lab.rules) expect(r.provenEdge).toBe(r.edgeZ >= sig.ruleZ)
+    // Several rules clear 2σ on fair data — the best of 136 usually does — and
+    // none may be called an edge for it.
+    expect(lab.rules.filter((r) => r.provenEdge)).toEqual([])
+    expect(lab.verdict).toMatch(/Nothing beat the fair line|No constraint/)
+  })
+
+  it('counts the pool it actually deals, at today’s intervals', () => {
+    const specs = featureSpecs(K, D)
+    const sample = sampleUniverse(K, D, SAMPLE_SIZE, specs)
+    for (const mode of lab.modes) {
+      const inPool = modePredicate(lab, mode)
+      const kept = sample.combos.filter((c) => inPool(c)).length / sample.size
+      expect(mode.currentShare).toBeCloseTo(kept, 9)
+      expect(mode.combinationsAfter).toBe(Math.round(lab.universe * mode.currentShare))
+    }
+  })
+
+  it('still finds an edge that really exists, on draws it never saw', () => {
+    /*
+     * The other half of the claim. A machine that can never throw a total
+     * outside 110–240 gives every sum rule a genuine edge: it removes space
+     * where no winner can land. Selection must find it and the replay must
+     * confirm it out of sample — or the validation is merely blind, not honest.
+     */
+    const rnd = (() => { let a = 99; return () => { a = (a + 0x6d2b79f5) >>> 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296 } })()
+    const biased: Draw[] = []
+    while (biased.length < 900) {
+      const bag = Array.from({ length: K }, (_, i) => i + 1)
+      for (let j = 0; j < D; j++) { const k = j + Math.floor(rnd() * (K - j)); [bag[j], bag[k]] = [bag[k], bag[j]] }
+      const sorted = bag.slice(0, D).sort((a, b) => a - b)
+      const total = sorted.reduce((a, b) => a + b, 0)
+      if (total < 110 || total > 240) continue
+      const date = new Date(Date.UTC(2000, 0, 1 + biased.length * 3)).toISOString().slice(0, 10)
+      biased.push({ date, dow: new Date(`${date}T00:00:00Z`).getUTCDay(), numbers: sorted, sorted })
+    }
+    const edgeLab = analyzeConstraints(biased, K, D)!
+    const best = edgeLab.modes.reduce((a, b) => (b.validation.z > a.validation.z ? b : a))
+    expect(best.validation.verdict).toBe('edge')
+    expect(best.validation.survival).toBeGreaterThan(best.validation.share)
   })
 })
 
@@ -786,14 +900,17 @@ describe('screening new pattern families', () => {
     const lab = analyzeConstraints(draws, K, D)!
     const deep = lab.modes.find((m) => m.key === 'deep')!
     const verdicts = poolWalkForward(lab, deep, draws)
-    expect(verdicts.length).toBe(lab.evaluated)
+    // Only draws some earlier selection was scored on get a verdict: the ones
+    // before the first refit were selected from and never tested.
+    expect(verdicts.length).toBe(deep.validation.draws)
+    expect(verdicts[0].date).toBe(deep.validation.from)
     expect(new Set(verdicts.map((v) => v.date)).size).toBe(verdicts.length)
     for (const v of verdicts) expect(v.kept).toBe(v.cutBy === null)
 
     // On fair data the pool must hold winners at the rate it keeps space — that
     // is the identity, and a replay that beat it would mean the replay leaks.
     const held = verdicts.filter((v) => v.kept).length / verdicts.length
-    expect(Math.abs(held - deep.spaceShare)).toBeLessThan(0.06)
+    expect(Math.abs(held - deep.validation.share)).toBeLessThan(0.06)
 
     // The real guard: truncating the history must not change the verdicts that
     // survive, because none of them may depend on a later draw.

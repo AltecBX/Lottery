@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Draw, Settings } from './engine/types.ts'
 import { DEFAULT_SETTINGS } from './engine/types.ts'
-import { mergeDraws } from './engine/parse.ts'
+import { mergeDraws, reconcileDraws } from './engine/parse.ts'
 import { generateSampleDraws } from './engine/sample.ts'
-import { attachSales, fetchOfficialResults, fetchSalesByDay, type SyncKey } from './engine/sync.ts'
+import { attachSales, fetchOfficialResults, fetchSalesByDay, syncMessage, type SyncKey } from './engine/sync.ts'
 import {
   createGame, daysSinceLastDraw, migrateLegacy, OFFICIAL_GAMES,
   type GameData, type GamesState, type SavedTicket,
@@ -152,22 +152,34 @@ export default function App() {
    * that on a phone, with the whole Lab dimmed behind "Recalculating…".
    */
   const engineSettings = useMemo(
-    () => ({ ...settings, exploreWindow: 0, drawTime: '', bonus: 'auto' as const, drawSize: 0 }),
-    [settings.poolMax, settings.nextDate, settings.specialMax, settings.era],
+    () => ({ ...settings, exploreWindow: 0, drawTime: '', bonus: 'auto' as const, drawSize: 0, ruleKey: activeGame?.syncKey }),
+    [settings.poolMax, settings.nextDate, settings.specialMax, settings.era, activeGame?.syncKey],
   )
   const { result, computing, error: engineError } = useEngine(draws, engineSettings)
   // Read inside callbacks that must not re-create themselves on every recompute
   const resultRef = useRef(result)
   resultRef.current = result
 
-  const say = (msg: string) => {
-    setFlash(msg)
-    window.setTimeout(() => setFlash(''), 4600)
-  }
+  const say = (msg: string) => setFlash(msg)
+  /*
+   * A message stays up for its full time once it can actually be seen. It is
+   * hidden behind the spinner while the model recomputes, and a sync that adds
+   * draws always starts a recompute — so a timer started when the message was
+   * set ran out behind "Recalculating…" on any phone slower than 4.6 seconds,
+   * and "N new draws added" was never shown at all.
+   */
+  useEffect(() => {
+    if (!flash || computing || syncing) return
+    const t = window.setTimeout(() => setFlash(''), 4600)
+    return () => window.clearTimeout(t)
+  }, [flash, computing, syncing])
 
   const setActiveId = useCallback((id: string) => {
     setGamesState((s) => ({ ...s, activeId: id }))
   }, [setGamesState])
+
+  const gamesRef = useRef(gamesState)
+  gamesRef.current = gamesState
 
   const updateGame = useCallback((id: string, fn: (g: GameData) => GameData) => {
     setGamesState((s) => ({ ...s, games: s.games.map((g) => (g.id === id ? fn(g) : g)) }))
@@ -241,18 +253,24 @@ export default function App() {
        * time. Merging against the snapshot this callback closed over and then
        * assigning the result wholesale silently deleted anything added during
        * the fetch — add a result, or import, or delete a row while a sync is
-       * in flight and it was gone when the sync landed. `mergeDraws` is pure,
-       * so the count comes back through a ref for the toast below.
+       * in flight and it was gone when the sync landed.
+       *
+       * The counts for the message cannot come out of that updater: React runs
+       * it immediately only when nothing else is pending on the component, and
+       * during a sync something usually is — so they were read as zero and "N
+       * new draws added" went unsaid. They are counted against the latest
+       * committed state instead, which is what the updater will see.
        */
-      const addedRef = { n: 0 }
-      updateGame(gameId, (g) => {
-        const merged = mergeDraws(g.draws, outcome.draws)
-        addedRef.n = merged.added
-        return { ...g, draws: merged.merged }
-      })
-      const added = addedRef.n
-      if (added > 0) say(`${game.name}: ${added} new draw${added === 1 ? '' : 's'} added — model retrained.`)
-      else if (!silentWhenCurrent) say(`${game.name} is already up to date.`)
+      const latest = gamesRef.current.games.find((g) => g.id === gameId)?.draws ?? []
+      const { added, corrected } = reconcileDraws(latest, outcome.draws)
+      // The official record is authoritative for its own dates, so a stored
+      // row it contradicts is replaced rather than kept beside it.
+      updateGame(gameId, (g) => ({ ...g, draws: reconcileDraws(g.draws, outcome.draws).merged }))
+      // Quiet only when there is nothing to say: a source that is behind is
+      // reported even on the automatic refresh.
+      if (added > 0 || corrected.length || outcome.freshness.overdue.length || !silentWhenCurrent) {
+        say(syncMessage(game.name, added, corrected, outcome.freshness))
+      }
       void hydrateSales(gameId, game.syncKey)
     } catch (err) {
       say(`Sync failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -279,7 +297,10 @@ export default function App() {
       setGamesState((s) => ({ games: [...s.games, game], activeId: game.id }))
       setDialog('')
       void hydrateSales(game.id, key)
-      say(`${meta.name} set up — ${outcome.draws.length.toLocaleString()} official draws loaded.`)
+      const behind = outcome.freshness.overdue.length
+        ? ` ${syncMessage(meta.name, 0, [], outcome.freshness)}`
+        : ` Latest result ${outcome.freshness.latest}.`
+      say(`${meta.name} set up — ${outcome.draws.length.toLocaleString()} official draws loaded.${behind}`)
     } catch (err) {
       say(`Could not set up ${meta.name}: ${err instanceof Error ? err.message : String(err)}`)
     } finally {

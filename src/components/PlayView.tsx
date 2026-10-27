@@ -239,7 +239,7 @@ export function PlayView({ res, game, draws, drawTime, feed, savedTickets, onSet
         <p className="play-stat">
           Since its cuts were set on {formatDate(CUTS_SET_ON)}, this pool has held the winner in{' '}
           <b>{fresh.held} of {fresh.total}</b> draws — draws it was never chosen from. Its size predicts about{' '}
-          <b>{Math.round(fresh.total * mode.spaceShare)}</b>: a pool holds winners at the rate it holds combinations,
+          <b>{Math.round(fresh.total * mode.validation.share)}</b>: a pool holds winners at the rate it holds combinations,
           so a smaller one would have held fewer, never a larger share.
         </p>
       )}
@@ -251,8 +251,13 @@ export function PlayView({ res, game, draws, drawTime, feed, savedTickets, onSet
             so the true figure is a shade under this one. */}
         {lab && mode && (
           <> and drawn from about {((mode.combinationsAfter * (res.special?.K ?? 1)) / 1e6).toFixed(1)} million
-          combinations — the deepest cut the record supports, keeping {Math.round(mode.spaceShare * 100)}% of the pool
-          and {Math.round(mode.survival * 100)}% of the winners it was tested against</>
+          combinations — the deepest cut the record supports, keeping {Math.round(mode.currentShare * 100)}% of the pool
+          {mode.validation.draws > 0
+            ? <>; re-chosen from earlier draws only and tested on {mode.validation.draws.toLocaleString()} it had not
+              seen, it held {Math.round(mode.validation.survival * 100)}% of the winners, where a random pool this size
+              holds {Math.round(mode.validation.share * 100)}%</>
+            : <> and {Math.round(mode.survival * 100)}% of the winners it was chosen on — too little history yet to test
+              it on any others</>}</>
         )}
         . Spread to cover different numbers, never a past jackpot, never a shape this game has not produced, and never a
         combination the whole country plays — that last one changes no odds at all, it just means a jackpot you win is
