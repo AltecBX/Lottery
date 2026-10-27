@@ -152,8 +152,8 @@ export default function App() {
    * that on a phone, with the whole Lab dimmed behind "Recalculating…".
    */
   const engineSettings = useMemo(
-    () => ({ ...settings, exploreWindow: 0, drawTime: '', bonus: 'auto' as const, drawSize: 0 }),
-    [settings.poolMax, settings.nextDate, settings.specialMax, settings.era],
+    () => ({ ...settings, exploreWindow: 0, drawTime: '', bonus: 'auto' as const, drawSize: 0, ruleKey: activeGame?.syncKey }),
+    [settings.poolMax, settings.nextDate, settings.specialMax, settings.era, activeGame?.syncKey],
   )
   const { result, computing, error: engineError } = useEngine(draws, engineSettings)
   // Read inside callbacks that must not re-create themselves on every recompute

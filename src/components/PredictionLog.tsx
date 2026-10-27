@@ -107,12 +107,14 @@ export function PredictionLog({ res }: { res: EngineResult }) {
         <p className="hint" style={{ display: 'block', marginBottom: 10 }}>
           <strong>Deep cut, replayed:</strong> the pool would have held{' '}
           <strong>{pool.held.toLocaleString()} of {pool.judged.toLocaleString()}</strong> past winners
-          ({(100 * pool.rate).toFixed(1)}%) while keeping {(100 * deep.spaceShare).toFixed(1)}% of the
-          combinations — {Math.abs(pool.rate - deep.spaceShare) < 0.02
+          ({(100 * pool.rate).toFixed(1)}%) while keeping {(100 * deep.validation.share).toFixed(1)}% of the
+          combinations — {Math.abs(pool.rate - deep.validation.share) < 0.02
             ? 'it costs almost exactly what it saves, which is what a fair draw forces.'
-            : `a gap of ${((pool.rate - deep.spaceShare) * 100).toFixed(1)} points.`}
+            : `a gap of ${((pool.rate - deep.validation.share) * 100).toFixed(1)} points.`}
           {pool.top.length > 0 && <> Misses came from {pool.top.map(([k, n]) => `${k} (${n})`).join(', ')}.</>}
-          {' '}Each row is judged by the pool as it stood <em>before</em> that draw, so nothing here knows its own answer.
+          {' '}Each row is judged by the pool as it stood <em>before</em> that draw — its shape rules chosen from earlier
+          draws only — so nothing here knows its own answer. Rows before {formatDate(deep.validation.from)} have no
+          verdict: those draws were used to choose the first rules, never to test them.
         </p>
       )}
       <div className="tbl-wrap">

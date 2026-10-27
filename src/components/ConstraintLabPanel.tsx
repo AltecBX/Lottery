@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import type { Draw, EngineResult } from '../engine/types.ts'
 import type { ConstraintMode, ConstraintRule } from '../engine/constraintlab.ts'
-import { inspectCombination, reductionLedger } from '../engine/constraintlab.ts'
+import { inspectCombination, reductionLedger, REFIT_EVERY } from '../engine/constraintlab.ts'
 import { contextAt } from '../engine/constraints.ts'
 import { formatDate } from '../engine/dates.ts'
 import { SectionCard, Ball, Tile, fmtPct } from './shared.tsx'
@@ -179,8 +179,10 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
     )
   }
 
-  const cutPct = 1 - mode.spaceShare
-  const holdoutGap = mode.holdoutSurvival - mode.spaceShare
+  const cutPct = 1 - mode.currentShare
+  const v = mode.validation
+  const holdoutGap = v.survival - v.share
+  const sig = lab.significance
 
   return (
     <SectionCard
@@ -227,44 +229,57 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
           deltaDir={cutPct > 0.001 ? 'up' : 'flat'}
         />
         <Tile
-          label="Unseen winners kept"
+          label="Winners kept where chosen"
           value={fmtPct(mode.survival, 2)}
-          delta={`against ${fmtPct(mode.spaceShare, 2)} of the space kept`}
-          /* Landing on the space share is the expected result, so only a clear
-             gap either way is worth colouring. */
-          deltaDir={Math.abs(mode.survival - mode.spaceShare) < 0.01 ? 'flat' : mode.survival > mode.spaceShare ? 'up' : 'down'}
+          delta={`in-sample, against ${fmtPct(mode.spaceShare, 2)} of the space — flattered by the choosing`}
+          deltaDir="flat"
         />
         <Tile
-          label="Held-out winners kept"
-          value={fmtPct(mode.holdoutSurvival, 2)}
-          delta={`${big(mode.holdoutDraws)} draws the optimiser never saw`}
-          deltaDir={Math.abs(holdoutGap) < 0.01 ? 'flat' : holdoutGap > 0 ? 'up' : 'down'}
+          label="Winners kept, unseen"
+          value={v.draws ? fmtPct(v.survival, 2) : '—'}
+          delta={v.draws
+            ? `${big(v.draws)} draws, each judged by rules chosen before it; a random pool this size keeps ${fmtPct(v.share, 2)}`
+            : 'not enough history to test on draws it was not chosen from'}
+          /* Landing on the random pool's share is the expected result, so only a
+             clear gap either way is worth colouring. */
+          deltaDir={!v.draws || Math.abs(holdoutGap) < 0.01 ? 'flat' : holdoutGap > 0 ? 'up' : 'down'}
         />
         <Tile
-          label="Beat the fair line by"
-          value={`${mode.holdoutEdgeZ >= 0 ? '+' : ''}${mode.holdoutEdgeZ.toFixed(1)}σ`}
-          /* Three settings are on screen at once, so the best of them clearing
-             2σ is roughly a one-in-twenty event on draws with no edge at all.
-             That is worth showing and not worth believing yet. */
-          delta={mode.holdoutEdgeZ >= 3
-            ? 'clears the fair line on draws it never saw'
-            : mode.holdoutEdgeZ >= 2
-              ? 'above the line, but it is the best of three settings — not established'
-              : 'inside noise — cutting costs what it saves'}
-          deltaDir={mode.holdoutEdgeZ >= 3 ? 'up' : 'flat'}
+          label="Beat a random pool by"
+          value={v.draws ? `${v.z >= 0 ? '+' : ''}${v.z.toFixed(1)}σ` : '—'}
+          /* Four settings are tested at once, so the bar is the one the best of
+             four needs — not the 2σ a single test would. */
+          delta={v.verdict === 'edge'
+            ? `clears the ${v.zNeeded.toFixed(1)}σ four settings need, on draws it never saw`
+            : v.verdict === 'worse'
+              ? 'below a random pool of the same size'
+              : v.verdict === 'insufficient'
+                ? 'too few unseen draws to judge yet'
+                : `inside noise — an edge needs ${v.zNeeded.toFixed(1)}σ with four settings tried`}
+          deltaDir={v.verdict === 'edge' ? 'up' : v.verdict === 'worse' ? 'down' : 'flat'}
         />
       </div>
 
       <p className="hint" style={{ display: 'block' }}>
         {verdict?.proven
-          ? `${verdict.proven} of ${lab.rules.length} candidate rules kept winners at least 2σ above their own space share.`
-          : `Not one of ${lab.rules.length} candidate rules kept winners meaningfully better than it kept candidates.`}
-        {' '}In-sample this selection reads {mode.edgeZ >= 0 ? '+' : ''}{mode.edgeZ.toFixed(1)}σ, but the optimiser chose
-        those rules on that same record; on the held-out half it reads {mode.holdoutEdgeZ >= 0 ? '+' : ''}
-        {mode.holdoutEdgeZ.toFixed(1)}σ. Trust the second number.
-        {mode.survival < mode.target && (
-          <> The {fmtPct(mode.target, 1)} target was met on the draws the optimiser could see; across the whole record
-          it lands at {fmtPct(mode.survival, 2)}, and that shortfall is the honest cost of choosing rules from history.</>
+          ? `${verdict.proven} of ${lab.rules.length} candidate rules kept winners past the ${sig ? sig.ruleZ.toFixed(1) : '3.4'}σ that ${lab.rules.length} rules tested at once require.`
+          : `Not one of ${lab.rules.length} candidate rules kept winners meaningfully better than it kept candidates${sig ? ` — with that many tried, a real edge needs ${sig.ruleZ.toFixed(1)}σ` : ''}.`}
+        {' '}In-sample this selection reads {mode.edgeZ >= 0 ? '+' : ''}{mode.edgeZ.toFixed(1)}σ, but it was chosen on that
+        same record.
+        {v.draws > 0 && (
+          <> Re-chosen every {REFIT_EVERY} draws from earlier draws only and judged on the ones that followed, it reads{' '}
+          {v.z >= 0 ? '+' : ''}{v.z.toFixed(1)}σ over {big(v.draws)} draws since {formatDate(v.from)} (winners kept{' '}
+          {fmtPct(v.ciLo, 1)}–{fmtPct(v.ciHi, 1)}, 95%). Trust that number. Between refits it kept{' '}
+          {fmtPct(1 - v.turnover, 0)} of its rules.</>
+        )}
+        {v.draws > 0 && v.survival < mode.target && (
+          <> The {fmtPct(mode.target, 1)} target is met on the draws the rules are chosen from; on draws they had not
+          seen it lands at {fmtPct(v.survival, 2)}, and that shortfall is the honest cost of choosing rules from history.</>
+        )}
+        {sig && (
+          <> The method was frozen on {formatDate(sig.frozenOn)}: {v.prospective.draws > 0
+            ? `${v.prospective.draws} draw${v.prospective.draws === 1 ? '' : 's'} since, the only ones nothing here was tuned against — winners kept ${v.prospective.held} of ${v.prospective.draws}, a random pool would keep ${(v.prospective.draws * v.prospective.share).toFixed(1)}.`
+            : 'every draw after that is a test nothing here was tuned against, and the count starts with the next one.'}</>
         )}
       </p>
 
@@ -494,8 +509,8 @@ export function ConstraintLabPanel({ res, draws }: { res: EngineResult; draws: D
       {mode.eliminated.length > 0 && (
         <>
           <div className="mini-title" style={{ marginTop: 18 }}>
-            Winners this setting would have thrown away
-            {' '}({big(Math.round((1 - mode.survival) * lab.evaluated))} of {big(lab.evaluated)})
+            Winners this setting threw away on draws it had not been chosen on
+            {' '}({big(v.draws - v.held)} of {big(v.draws)}, latest first)
           </div>
           <div className="cl-elim">
             {mode.eliminated.slice(0, 8).map((e) => (

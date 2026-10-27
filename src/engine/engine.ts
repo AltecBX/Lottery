@@ -8,6 +8,7 @@ import { analyzeRepeats } from './repeats.ts'
 import { analyzePositions, positionalFit } from './positions.ts'
 import { analyzeConstraints, poolWalkForward, reducedPoolAcceptor } from './constraintlab.ts'
 import { detectEra } from './era.ts'
+import { bonusEraStart, isRuleKey, mainsEraStart, rulesAt, verifyHistory } from './rules.ts'
 import {
   currentStreaks, dowProfiles, hotCold, overdueList, positionProfiles,
   topFollowers, topPairs, trends, weekdaySignificance,
@@ -83,10 +84,52 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
    * valid ticket today whenever the pool only grew, so repeat-watch and the
    * already-drawn exclusions keep the whole record.
    */
-  const eraInfo = detectEra(allDraws)
+  /*
+   * An official game takes its rules from the published schedule: which pools
+   * every draw used, known before the draw, never read back off it. The check
+   * also turns away rows that break their own era's matrix and dates two
+   * sources disagree about — a misread result must not be trained on or
+   * scored. Any other game falls back to inferring its current era.
+   */
+  const ruleKey = isRuleKey(settings.ruleKey) ? settings.ruleKey : null
+  let dataHealth: EngineResult['dataHealth']
+  let source = allDraws
+  if (ruleKey && allDraws.length > 0) {
+    const check = verifyHistory(allDraws, ruleKey)
+    source = allDraws.filter((d) => !check.rejected.has(d.date))
+    const reasons = new Map<string, string>()
+    for (const i of check.issues) if (check.rejected.has(i.date) && !reasons.has(i.date)) reasons.set(i.date, i.detail)
+    dataHealth = {
+      checked: allDraws.length,
+      rejected: [...reasons].map(([date, reason]) => ({ date, reason })),
+      missing: check.missing,
+      issues: check.issues.length,
+    }
+  }
+  const lastDate = source.length ? source[source.length - 1].date : ''
+  const scheduled = ruleKey && lastDate ? rulesAt(ruleKey, lastDate) : null
+  const mainsFrom = scheduled ? mainsEraStart(ruleKey!, lastDate)! : ''
+  const bonusFrom = scheduled ? bonusEraStart(ruleKey!, lastDate)! : ''
+
+  const eraInfo = scheduled ? null : detectEra(source)
   const mainsShrank = !!eraInfo && eraInfo.earlyMax > eraInfo.currentMax
-  const draws = eraInfo ? allDraws.slice(eraInfo.cutoffIndex) : allDraws
-  const comboHistory = mainsShrank ? draws : allDraws
+  /*
+   * The main numbers and the bonus ball are two machines with two pools, and
+   * they change independently. Mega Millions' 2025 change shrank only the Mega
+   * Ball, so its white balls have run on the same 5/70 rules since October
+   * 2017 — treating the whole game as new threw away over 1,000 valid draws
+   * and left the model and the Constraint Lab learning from 164. The mains
+   * learn from their own era; bonus balls from before the bonus era are
+   * blanked so the bonus model learns only from today's pool.
+   */
+  const draws = scheduled
+    ? source
+        .filter((d) => d.date >= mainsFrom)
+        .map((d) => (d.special !== undefined && d.date < bonusFrom ? { ...d, special: undefined } : d))
+    : eraInfo ? source.slice(eraInfo.cutoffIndex) : source
+  const comboHistory = scheduled
+    ? source.filter((d) => d.sorted.every((n) => n <= scheduled.K))
+    : mainsShrank ? draws : source
 
   if (draws.length < MIN_DRAWS) {
     return emptyResult(
@@ -106,7 +149,8 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
 
   let maxObserved = 0
   for (const d of draws) for (const n of d.sorted) maxObserved = Math.max(maxObserved, n)
-  const K = settings.poolMax > 0 ? settings.poolMax : maxObserved
+  // The schedule knows the pool even before every number in it has been drawn.
+  const K = settings.poolMax > 0 ? settings.poolMax : scheduled ? scheduled.K : maxObserved
   if (maxObserved > K) {
     return emptyResult(`Your data contains ${maxObserved}, above the configured pool maximum of ${K}. Raise "Highest number" in Settings.`)
   }
@@ -123,7 +167,12 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
   // Bonus/special ball: model it when (nearly) every draw carries one
   const withSpecial = draws.filter((d) => d.special !== undefined && d.special >= 1)
   let specialKs = 0
-  if (withSpecial.length >= draws.length * 0.9 && withSpecial.length >= MIN_DRAWS) {
+  if (scheduled) {
+    // Official games always have one; its pool is the schedule's, and its
+    // history is the bonus era only (earlier bonus balls are blanked above).
+    specialKs = settings.specialMax > 0 ? settings.specialMax : scheduled.specialK
+    if (withSpecial.length < MIN_DRAWS) specialKs = 0
+  } else if (withSpecial.length >= draws.length * 0.9 && withSpecial.length >= MIN_DRAWS) {
     let maxS = 0
     for (const d of withSpecial) maxS = Math.max(maxS, d.special!)
     // Today's bonus pool, not the largest ball this history has ever seen. The
@@ -145,7 +194,7 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
   const state = new HistoryState(K, D)
   for (const d of draws) state.push(d)
 
-  const scheduleDows = detectSchedule(draws)
+  const scheduleDows = scheduled ? rulesAt(ruleKey!, lastDate)!.drawDays : detectSchedule(draws)
   const nextDate = settings.nextDate && /^\d{4}-\d{2}-\d{2}$/.test(settings.nextDate)
     ? settings.nextDate
     : inferNextDate(draws, scheduleDows)
@@ -163,7 +212,7 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
   // pool it defines: the Balanced bands, no already-drawn main-set, none of the
   // never-seen families. Being in the pool changes no ticket's odds — it keeps
   // the model from suggesting shapes its own record calls absurd.
-  const constraintLab = analyzeConstraints(allDraws, K, D)
+  const constraintLab = analyzeConstraints(source, K, D, scheduled ? { eraStart: mainsFrom } : {})
   let acceptor: ((sorted: number[]) => boolean) | null = null
   if (constraintLab) {
     const balanced = constraintLab.modes.find((m) => m.key === 'balanced') ?? constraintLab.modes[0]
@@ -176,7 +225,7 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
     // come from would have done — judged only on what was known at the time.
     const deep = constraintLab.modes.find((m) => m.key === 'deep')
     if (deep) {
-      const verdicts = new Map(poolWalkForward(constraintLab, deep, allDraws).map((v) => [v.date, v]))
+      const verdicts = new Map(poolWalkForward(constraintLab, deep, source).map((v) => [v.date, v]))
       for (const p of bt.summary.points) {
         const v = verdicts.get(p.date)
         if (!v) continue
@@ -294,6 +343,10 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
     // does not belong behind a 1.6-second backtest.
     windowFrequency: [],
     backtest: bt.summary,
+    rules: scheduled
+      ? { source: 'schedule', mainsFrom, bonusFrom, K, specialK: specialKs }
+      : { source: 'inferred', mainsFrom: draws[0].date, bonusFrom: draws[0].date, K, specialK: specialKs },
+    dataHealth,
     computeMs: Math.round(performance.now() - started),
   }
   return result

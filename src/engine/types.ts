@@ -44,6 +44,14 @@ export interface Settings {
    * ticket you can buy. Nothing is ever deleted either way.
    */
   era: 'current' | 'all'
+  /**
+   * Which official game this history belongs to, when it is one. Supplied by
+   * the app at compute time, never stored: with it the engine takes each
+   * draw's rules from the published schedule instead of inferring eras from
+   * the numbers, and models the main numbers and the bonus ball each on their
+   * own era.
+   */
+  ruleKey?: 'powerball' | 'megamillions'
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -319,6 +327,14 @@ export interface EngineResult {
   bestComboFit: import('./positions.ts').PositionalFit | null
   /** Constraint Lab: walk-forward search-space reduction, null when history is too short */
   constraintLab: import('./constraintlab.ts').ConstraintLab | null
+  /**
+   * Where the rules behind this analysis came from. 'schedule' = the published
+   * rule history (official games); 'inferred' = read off the draws themselves.
+   * The main numbers and the bonus ball each have their own era.
+   */
+  rules?: { source: 'schedule' | 'inferred'; mainsFrom: string; bonusFrom: string; K: number; specialK: number }
+  /** What checking the history against each draw's own rules found */
+  dataHealth?: { checked: number; rejected: { date: string; reason: string }[]; missing: string[]; issues: number }
 
   hot: HotColdEntry[]
   cold: HotColdEntry[]
