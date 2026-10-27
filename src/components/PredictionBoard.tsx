@@ -183,6 +183,9 @@ export function PredictionBoard({ res, draws }: { res: EngineResult; draws: Draw
           {pick.map((n) => <Ball key={n} n={n} size="md" variant="pick" />)}
           {topBonus !== undefined && <Ball n={topBonus} size="md" variant="special" />}
         </span>
+        {res.bestCombo?.inPool === false && (
+          <span className="hint" style={{ display: 'block', fontSize: 12 }}>outside the reduced pool — none of the top numbers fit inside it</span>
+        )}
       </div>
 
       <Grid

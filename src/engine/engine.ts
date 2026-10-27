@@ -16,6 +16,14 @@ import {
 import { addDays, dowOf } from './dates.ts'
 
 export const MAX_POOL = 150
+
+/**
+ * The model as it stands in this build. Every row of the prediction log is
+ * reproduced by this version from the draws before it; a prediction the app
+ * actually showed is also kept as it was, with the version that made it, so a
+ * later change of method can never rewrite what was said at the time.
+ */
+export const MODEL_VERSION = '2026.10.27 — 19 signals + learned combiner, significance-gated weights; rules from the published schedule'
 export const MIN_DRAWS = 12
 
 function emptyResult(message: string): EngineResult {
@@ -226,11 +234,16 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
     const deep = constraintLab.modes.find((m) => m.key === 'deep')
     if (deep) {
       const verdicts = new Map(poolWalkForward(constraintLab, deep, source).map((v) => [v.date, v]))
+      const folds = deep.validation.folds
       for (const p of bt.summary.points) {
         const v = verdicts.get(p.date)
         if (!v) continue
         p.poolKept = v.kept
         if (v.cutBy) p.poolCutBy = v.cutBy
+        // The pool's size when this draw was predicted: the fold in force then
+        let f = -1
+        for (let i = 0; i < folds.length && folds[i].origin <= p.date; i++) f = i
+        if (f >= 0) p.poolShare = folds[f].share
       }
     }
   }
@@ -347,6 +360,7 @@ export function runEngine(allDraws: Draw[], settings: Settings): EngineResult {
       ? { source: 'schedule', mainsFrom, bonusFrom, K, specialK: specialKs }
       : { source: 'inferred', mainsFrom: draws[0].date, bonusFrom: draws[0].date, K, specialK: specialKs },
     dataHealth,
+    modelVersion: MODEL_VERSION,
     computeMs: Math.round(performance.now() - started),
   }
   return result

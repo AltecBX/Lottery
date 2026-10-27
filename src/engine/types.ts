@@ -122,6 +122,14 @@ export interface ComboPrediction {
   pairLift: number
   sumZ: number
   notes: string[]
+  /**
+   * Inside the reduced pool? Set whenever a pool was applied. A ticket outside
+   * it appears only when the widest candidate net found none inside, and every
+   * view that shows it says so.
+   */
+  inPool?: boolean
+  /** How many top-ranked numbers the combinations were built from */
+  candidates?: number
 }
 
 export interface SimilarSituation {
@@ -162,6 +170,15 @@ export interface BacktestPoint {
   poolKept?: boolean
   /** The layer that removed it, when the pool would have missed this winner */
   poolCutBy?: string
+  /**
+   * Share of all combinations the Deep cut pool held when this draw was
+   * predicted — the pool's size at the time, from the replay selection in force
+   */
+  poolShare?: number
+  /** The three heaviest signal weights this prediction used */
+  weightsTop?: [string, number][]
+  /** The signal whose weight moved most since the previous draw, and by how much; key '' when none moved */
+  weightShift?: { key: string; delta: number }
 }
 
 export interface SignalPerformance {
@@ -334,6 +351,8 @@ export interface EngineResult {
    */
   rules?: { source: 'schedule' | 'inferred'; mainsFrom: string; bonusFrom: string; K: number; specialK: number }
   /** What checking the history against each draw's own rules found */
+  /** The model that produced this result; see MODEL_VERSION */
+  modelVersion?: string
   dataHealth?: { checked: number; rejected: { date: string; reason: string }[]; missing: string[]; issues: number }
 
   hot: HotColdEntry[]
