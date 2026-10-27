@@ -1659,12 +1659,35 @@ interface WalkRecord {
   universe: number
 }
 
+/**
+ * The pass matrix again, one bit per step, rule-major: [r·words + ⌊step/32⌋].
+ * The greedy asks "how many steps does this conjunction keep?" dozens of times
+ * per refit and a dozen refits per run; 32 steps to a popcount makes that
+ * cheap enough to re-select at every origin on a phone.
+ */
+function packPasses(w: WalkRecord): { bits: Uint32Array; words: number } {
+  const words = Math.ceil(w.evaluated / 32)
+  const bits = new Uint32Array(w.nRules * words)
+  for (let step = 0; step < w.evaluated; step++) {
+    const row = step * w.nRules
+    for (let r = 0; r < w.nRules; r++) if (w.passMatrix[row + r]) bits[r * words + (step >>> 5)] |= 1 << (step & 31)
+  }
+  return { bits, words }
+}
+
+/** All ones over the first `n` bits, zero after — the live set before anything is cut. */
+function onesBits(n: number): Uint32Array {
+  const out = new Uint32Array(Math.ceil(n / 32)).fill(0xffffffff)
+  if (n % 32) out[out.length - 1] = ((1 << (n % 32)) - 1) >>> 0
+  return out
+}
+
 /** What a selection made just before step `split` could see. */
 interface SelectionView {
   split: number
   candidates: number[]
-  /** Each candidate's interval as it stood at `split`, applied to the sample */
-  masks: Map<number, Uint8Array>
+  /** Each candidate's interval as it stood at `split`, applied to the sample, one bit per combination */
+  masks: Map<number, Uint32Array>
 }
 
 /**
@@ -1698,12 +1721,12 @@ function selectionView(w: WalkRecord, split: number): SelectionView {
   // what that costs in winners.
   ranked.sort((a, b) => a.share - b.share || a.r - b.r)
   const candidates = ranked.slice(0, 40).map((c) => c.r)
-  const masks = new Map<number, Uint8Array>()
+  const masks = new Map<number, Uint32Array>()
   for (const r of candidates) {
     const vals = w.sample.values[w.stepIv.featOfRule[r]]
     const { lo, hi } = ivAt(r)
-    const m = new Uint8Array(w.sample.size)
-    for (let s = 0; s < m.length; s++) m[s] = passes(vals[s], lo, hi) ? 1 : 0
+    const m = new Uint32Array(Math.ceil(w.sample.size / 32))
+    for (let s = 0; s < w.sample.size; s++) if (passes(vals[s], lo, hi)) m[s >>> 5] |= 1 << (s & 31)
     masks.set(r, m)
   }
   return { split, candidates, masks }
@@ -1720,12 +1743,12 @@ function selectionView(w: WalkRecord, split: number): SelectionView {
  * which is what keeps the deep setting affordable at every refit.
  */
 function greedySelect(
-  w: WalkRecord, view: SelectionView, target: number,
+  w: WalkRecord, packed: { bits: Uint32Array; words: number }, view: SelectionView, target: number,
 ): { chosen: number[]; path: { spaceShare: number; survival: number }[] } {
   const S = w.sample.size
   const n = view.split
-  const aliveS = new Uint8Array(S).fill(1)
-  const aliveH = new Uint8Array(n).fill(1)
+  const aliveS = onesBits(S)
+  const aliveH = onesBits(n)
   const chosen: number[] = []
   const path: { spaceShare: number; survival: number }[] = []
   const taken = new Set<number>()
@@ -1738,9 +1761,10 @@ function greedySelect(
       if (taken.has(i)) continue
       const mask = view.masks.get(i)!
       let kept = 0
-      for (let s = 0; s < S; s++) kept += aliveS[s] & mask[s]
+      for (let k = 0; k < aliveS.length; k++) kept += popcount(aliveS[k] & mask[k])
       let hits = 0
-      for (let step = 0; step < n; step++) hits += aliveH[step] & w.passMatrix[step * w.nRules + i]
+      const base = i * packed.words
+      for (let k = 0; k < aliveH.length; k++) hits += popcount(aliveH[k] & packed.bits[base + k])
       const res = { survival: n > 0 ? hits / n : 1, spaceShare: kept / S }
       if (res.survival < target) continue
       const gain = current.spaceShare - res.spaceShare
@@ -1752,8 +1776,9 @@ function greedySelect(
     }
     if (bestIdx < 0 || !bestRes) break
     const chosenMask = view.masks.get(bestIdx)!
-    for (let s = 0; s < S; s++) aliveS[s] &= chosenMask[s]
-    for (let step = 0; step < n; step++) aliveH[step] &= w.passMatrix[step * w.nRules + bestIdx]
+    for (let k = 0; k < aliveS.length; k++) aliveS[k] &= chosenMask[k]
+    const base = bestIdx * packed.words
+    for (let k = 0; k < aliveH.length; k++) aliveH[k] &= packed.bits[base + k]
     chosen.push(bestIdx)
     taken.add(bestIdx)
     path.push(bestRes)
@@ -1782,7 +1807,7 @@ const allPass = (w: WalkRecord, chosen: number[], step: number): boolean => {
  * was chosen with the answers in view.
  */
 function validateMode(
-  w: WalkRecord, views: SelectionView[], target: number,
+  w: WalkRecord, packed: { bits: Uint32Array; words: number }, views: SelectionView[], target: number,
 ): { validation: ModeValidation; eliminated: ConstraintMode['eliminated'] } {
   const S = w.sample.size
   const zNeeded = bonferroniZ(MODE_TARGETS.length)
@@ -1795,7 +1820,7 @@ function validateMode(
   for (let k = 0; k < views.length; k++) {
     const from = views[k].split
     const to = k + 1 < views.length ? views[k + 1].split : w.evaluated
-    const { chosen } = greedySelect(w, views[k], target)
+    const { chosen } = greedySelect(w, packed, views[k], target)
     sets.push(new Set(chosen))
     const stride = Math.max(1, Math.round((to - from) / 50), Math.round(((to - from) * chosen.length) / 600))
     const share = chosen.length
@@ -1876,9 +1901,10 @@ function buildModes(w: WalkRecord): ConstraintMode[] {
   const origins = replayOrigins(w.evaluated)
   const views = origins.map((o) => selectionView(w, o))
   const today = selectionView(w, w.evaluated)
+  const packed = packPasses(w)
 
   return MODE_TARGETS.map(({ key, label, target }) => {
-    const { chosen, path } = greedySelect(w, today, target)
+    const { chosen, path } = greedySelect(w, packed, today, target)
     const funnel: FunnelStep[] = chosen.map((r, k) => ({
       ruleId: w.rules[r].id,
       label: w.rules[r].label,
@@ -1893,12 +1919,13 @@ function buildModes(w: WalkRecord): ConstraintMode[] {
       if (allPass(w, chosen, step)) hits++
       else failedSteps.push(step)
     }
-    let kept = 0
-    for (let s = 0; s < S; s++) {
-      let ok = 1
-      for (const r of chosen) if (!today.masks.get(r)![s]) { ok = 0; break }
-      kept += ok
+    const live = onesBits(S)
+    for (const r of chosen) {
+      const m = today.masks.get(r)!
+      for (let k = 0; k < live.length; k++) live[k] &= m[k]
     }
+    let kept = 0
+    for (let k = 0; k < live.length; k++) kept += popcount(live[k])
     const currentShare = kept / S
 
     // Re-measure the space against the walk-forward intervals, so the in-sample
@@ -1913,7 +1940,7 @@ function buildModes(w: WalkRecord): ConstraintMode[] {
       funnel[k].removed = (k > 0 ? matched[k - 1] : 1) - matched[k]
     }
 
-    const { validation, eliminated } = validateMode(w, views, target)
+    const { validation, eliminated } = validateMode(w, packed, views, target)
     return {
       key, label, target,
       ruleIds: chosen.map((r) => w.rules[r].id),
