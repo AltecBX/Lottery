@@ -1,4 +1,5 @@
 import type { Draw } from './types.ts'
+import { addDays, dowOf } from './dates.ts'
 
 /**
  * The rules each drawing was held under, from the published record rather than
@@ -96,6 +97,28 @@ function eraStart(key: RuleKey, date: string, field: (r: RuleSet) => number): st
   return list[start].from
 }
 
+/** Scheduled drawings strictly after `after` and strictly before `before`, in date order. */
+export function scheduledBetween(key: RuleKey, after: string, before: string): string[] {
+  const out: string[] = []
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(after)) return out
+  for (let day = addDays(after, 1); day < before; day = addDays(day, 1)) {
+    const r = rulesAt(key, day)
+    if (r && r.drawDays.includes(dowOf(day))) out.push(day)
+  }
+  return out
+}
+
+/**
+ * Drawings whose results should be out by `today` and are absent from a
+ * history ending at `latest`. Each drawing gets a day's grace — the morning
+ * after, its result is a sync away rather than missing — so one counts as
+ * overdue from the second day on. This is what lets a sync tell "nothing new
+ * has been drawn" apart from "the source has not caught up".
+ */
+export function overdueDrawings(key: RuleKey, latest: string, today: string): string[] {
+  return scheduledBetween(key, latest, addDays(today, -1))
+}
+
 /** One problem found in a history, tied to the draw it concerns. */
 export interface HistoryIssue {
   date: string
@@ -110,13 +133,6 @@ export interface HistoryCheck {
   /** Dates of draws that must not be trained on or scored: they break their own era's rules */
   rejected: Set<string>
 }
-
-const addDay = (iso: string, n: number): string => {
-  const d = new Date(`${iso}T12:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + n)
-  return d.toISOString().slice(0, 10)
-}
-const weekday = (iso: string): number => new Date(`${iso}T12:00:00Z`).getUTCDay()
 
 /**
  * Check a history against the rules each draw was held under: order,
@@ -159,16 +175,16 @@ export function verifyHistory(draws: Draw[], key: RuleKey, D = 5): HistoryCheck 
       })
       rejected.add(d.date)
     }
-    if (!r.drawDays.includes(weekday(d.date))) {
+    if (!r.drawDays.includes(dowOf(d.date))) {
       issues.push({ date: d.date, kind: 'off-schedule', detail: 'not a scheduled drawing day' })
     }
   }
   const missing: string[] = []
   if (draws.length > 1) {
     const have = new Set(draws.map((d) => d.date))
-    for (let day = draws[0].date; day <= draws[draws.length - 1].date; day = addDay(day, 1)) {
+    for (let day = draws[0].date; day <= draws[draws.length - 1].date; day = addDays(day, 1)) {
       const r = rulesAt(key, day)
-      if (r && r.drawDays.includes(weekday(day)) && !have.has(day)) missing.push(day)
+      if (r && r.drawDays.includes(dowOf(day)) && !have.has(day)) missing.push(day)
     }
   }
   return { issues, missing, rejected }

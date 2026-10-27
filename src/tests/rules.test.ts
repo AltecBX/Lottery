@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { bonusEraStart, mainsEraStart, RULE_SCHEDULE, rulesAt, verifyHistory, type RuleKey } from '../engine/rules.ts'
+import {
+  bonusEraStart, mainsEraStart, overdueDrawings, RULE_SCHEDULE, rulesAt, verifyHistory, type RuleKey,
+} from '../engine/rules.ts'
 import { runEngine } from '../engine/engine.ts'
 import { DEFAULT_SETTINGS, type Draw } from '../engine/types.ts'
 import { addDays, dowOf } from '../engine/dates.ts'
+import { combineOfficial, syncMessage } from '../engine/sync.ts'
+import { reconcileDraws } from '../engine/parse.ts'
+import { decodeHistory, encodeHistory, mergeSources } from '../engine/history.ts'
+
+const mk = (date: string, mains: number[], special?: number, extra: Partial<Draw> = {}): Draw => {
+  const sorted = [...mains].sort((a, b) => a - b)
+  return { date, dow: dowOf(date), numbers: mains, sorted, ...(special !== undefined ? { special } : {}), ...extra }
+}
 
 /**
  * A history that follows the schedule exactly: one draw on every scheduled
@@ -144,5 +154,68 @@ describe('the engine takes its rules from the schedule', () => {
     expect(res.dataHealth!.rejected.map((r) => r.date)).toEqual(['2020-06-03'])
     expect(res.drawCount).toBe(history.length - 1)
     expect(res.backtest.points.some((p) => p.date === '2020-06-03')).toBe(false)
+  })
+})
+
+describe('keeping the record current and consistent', () => {
+  it('calls a drawing overdue only after its day of grace', () => {
+    // Powerball draws Monday, Wednesday and Saturday. On Tuesday 27 October the
+    // Monday result is a sync away; the Saturday one is late.
+    expect(overdueDrawings('powerball', '2026-10-21', '2026-10-27')).toEqual(['2026-10-24'])
+    expect(overdueDrawings('powerball', '2026-10-24', '2026-10-27')).toEqual([])
+    expect(overdueDrawings('powerball', '2026-10-26', '2026-10-27')).toEqual([])
+    // Mega Millions draws Tuesday and Friday
+    expect(overdueDrawings('megamillions', '2026-10-13', '2026-10-27')).toEqual(['2026-10-16', '2026-10-20', '2026-10-23'])
+  })
+
+  const published = [mk('2026-10-17', [1, 2, 3, 4, 5], 6), mk('2026-10-19', [7, 8, 9, 10, 11], 12), mk('2026-10-21', [13, 14, 15, 16, 17], 18)]
+
+  it('does not call a stale published file up to date', () => {
+    const stale = combineOfficial('powerball', published, null, '2026-10-27')
+    expect(stale.freshness).toMatchObject({ latest: '2026-10-21', overdue: ['2026-10-24'], sources: ['published history'] })
+    const msg = syncMessage('Powerball', 0, [], stale.freshness)
+    expect(msg).not.toMatch(/up to date/)
+    expect(msg).toMatch(/behind — 1 scheduled drawing since 2026-10-21 has no published result yet \(2026-10-24\)/)
+  })
+
+  it('tops a stale file up from the live source without letting it rewrite the file', () => {
+    const live = [
+      mk('2026-10-17', [1, 2, 3, 4, 5], 9),           // disagrees with the reconciled file
+      mk('2026-10-24', [20, 21, 22, 23, 24], 3),
+      mk('2026-10-26', [30, 31, 32, 33, 34], 4),
+    ]
+    const out = combineOfficial('powerball', published, live, '2026-10-27')
+    expect(out.draws.map((d) => d.date)).toEqual(['2026-10-17', '2026-10-19', '2026-10-21', '2026-10-24', '2026-10-26'])
+    expect(out.draws[0].special).toBe(6)
+    expect(out.freshness).toMatchObject({ latest: '2026-10-26', overdue: [], sources: ['published history', 'New York live results'] })
+    expect(syncMessage('Powerball', 0, [], out.freshness)).toBe('Powerball is up to date — latest result 2026-10-26.')
+  })
+
+  it('replaces a stored result the official record contradicts, and keeps what it does not cover', () => {
+    const stored = [
+      mk('2022-05-10', [10, 20, 30, 40, 50], 6),       // the bad row
+      mk('2022-05-13', [1, 2, 3, 4, 5], 7),
+      mk('2026-10-28', [5, 6, 7, 8, 9], 1),            // typed in ahead of the sync
+    ]
+    const official = [mk('2022-05-10', [10, 20, 30, 40, 50], 9), mk('2022-05-13', [1, 2, 3, 4, 5], 7), mk('2022-05-17', [11, 12, 13, 14, 15], 2)]
+    const { merged, added, corrected } = reconcileDraws(stored, official)
+    expect(corrected).toEqual(['2022-05-10'])
+    expect(added).toBe(1)
+    expect(merged.map((d) => `${d.date}:${d.special}`)).toEqual(['2022-05-10:9', '2022-05-13:7', '2022-05-17:2', '2026-10-28:1'])
+    expect(verifyHistory(merged, 'megamillions').rejected.size).toBe(0)
+  })
+
+  it('builds the published file from the trusted source where two disagree, and records the disagreement', () => {
+    const louisiana = [mk('2022-05-10', [10, 20, 30, 40, 50], 9, { jackpot: 100e6 }), mk('2022-05-13', [1, 2, 3, 4, 5], 7)]
+    const newYork = [mk('2022-05-10', [10, 20, 30, 40, 50], 6), mk('2022-05-13', [1, 2, 3, 4, 5], 7, { winnerLocation: 'NY' }), mk('2022-05-17', [11, 12, 13, 14, 15], 2)]
+    const { merged, added, conflicts } = mergeSources(louisiana, newYork)
+    expect(added).toBe(1)
+    expect(merged.filter((d) => d.date === '2022-05-10').map((d) => d.special)).toEqual([9])
+    expect(merged.find((d) => d.date === '2022-05-13')!.winnerLocation).toBe('NY')
+    expect(louisiana[1].winnerLocation).toBeUndefined()   // inputs untouched
+    expect(conflicts).toEqual([{ date: '2022-05-10', kept: '10-20-30-40-50 + 9', dropped: '10-20-30-40-50 + 6' }])
+    const file = encodeHistory('megamillions', merged, ['la', 'ny'], conflicts)
+    expect(file.conflicts).toEqual(conflicts)
+    expect(decodeHistory(file)).toHaveLength(3)
   })
 })

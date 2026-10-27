@@ -16,9 +16,8 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { parseDelimitedText } from '../src/engine/parse.ts'
-import { mergeDraws } from '../src/engine/parse.ts'
 import { parseSocrataRows, SYNC_SOURCES, CSV_SOURCES } from '../src/engine/sync.ts'
-import { encodeHistory, decodeHistory, fillFromPrior } from '../src/engine/history.ts'
+import { encodeHistory, decodeHistory, fillFromPrior, mergeSources } from '../src/engine/history.ts'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = resolve(here, '..', 'public')
@@ -45,6 +44,7 @@ for (const { key } of SYNC_SOURCES) {
   const outFile = resolve(OUT_DIR, `history-${key}.json`)
   const sources = []
   let merged = []
+  let conflicts = []
 
   // Louisiana first: it carries jackpots and winner locations, and merging
   // keeps the richer record when both sources describe the same draw.
@@ -64,10 +64,16 @@ for (const { key } of SYNC_SOURCES) {
     const rows = JSON.parse(await get(ny.url, 'application/json'))
     const outcome = parseSocrataRows(rows, key)
     if (outcome.draws.length === 0) throw new Error('no rows parsed')
-    const before = merged.length
-    merged = mergeDraws(merged, outcome.draws).merged
+    // New York fills the dates Louisiana lacks and nothing else. Where the two
+    // disagree about a drawing Louisiana is kept — on the one such date so far,
+    // 2022-05-10 Mega Millions, the operator's own record agrees with it — and
+    // the disagreement is written into the file rather than silently resolved.
+    const result = mergeSources(merged, outcome.draws)
+    merged = result.merged
+    conflicts = result.conflicts
     sources.push(ny.url)
-    console.log(`${key}: new york ${summarize(outcome.draws)} → +${merged.length - before} new`)
+    console.log(`${key}: new york ${summarize(outcome.draws)} → +${result.added} new`)
+    for (const c of conflicts) console.warn(`${key}: sources disagree on ${c.date} — kept ${c.kept}, dropped ${c.dropped}`)
   } catch (err) {
     console.warn(`${key}: new york unavailable (${err.message})`)
   }
@@ -115,18 +121,20 @@ for (const { key } of SYNC_SOURCES) {
     console.log(`${key}: kept ${filled.kept} draws the sources no longer carry`)
   }
 
-  // Never publish a file thinner than the one already there: a source having a
-  // bad day must not silently shorten the user's history.
+  // Never publish a file covering fewer drawings than the one already there: a
+  // source having a bad day must not silently shorten the user's history.
+  // Counted in dates, not rows — dropping a conflicting duplicate is a fix.
   try {
-    const prev = JSON.parse(await readFile(outFile, 'utf8'))
-    if (prev.count > merged.length) {
-      console.warn(`${key}: built ${merged.length} but ${prev.count} already published — keeping the longer file`)
+    const prevDates = new Set(decodeHistory(JSON.parse(await readFile(outFile, 'utf8'))).map((d) => d.date)).size
+    const dates = new Set(merged.map((d) => d.date)).size
+    if (prevDates > dates) {
+      console.warn(`${key}: built ${dates} drawings but ${prevDates} already published — keeping the longer file`)
       continue
     }
   } catch { /* nothing published yet */ }
 
   await mkdir(OUT_DIR, { recursive: true })
-  const file = encodeHistory(key, merged, sources)
+  const file = encodeHistory(key, merged, sources, conflicts)
   await writeFile(outFile, `${JSON.stringify(file)}\n`)
   const kb = Math.round((await readFile(outFile)).length / 1024)
   console.log(`${key}: wrote ${file.count} draws ${file.first}→${file.last} (${kb}KB)\n`)

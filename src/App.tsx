@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Draw, Settings } from './engine/types.ts'
 import { DEFAULT_SETTINGS } from './engine/types.ts'
-import { mergeDraws } from './engine/parse.ts'
+import { mergeDraws, reconcileDraws } from './engine/parse.ts'
 import { generateSampleDraws } from './engine/sample.ts'
-import { attachSales, fetchOfficialResults, fetchSalesByDay, type SyncKey } from './engine/sync.ts'
+import { attachSales, fetchOfficialResults, fetchSalesByDay, syncMessage, type SyncKey } from './engine/sync.ts'
 import {
   createGame, daysSinceLastDraw, migrateLegacy, OFFICIAL_GAMES,
   type GameData, type GamesState, type SavedTicket,
@@ -244,15 +244,21 @@ export default function App() {
        * in flight and it was gone when the sync landed. `mergeDraws` is pure,
        * so the count comes back through a ref for the toast below.
        */
-      const addedRef = { n: 0 }
+      const result = { added: 0, corrected: [] as string[] }
       updateGame(gameId, (g) => {
-        const merged = mergeDraws(g.draws, outcome.draws)
-        addedRef.n = merged.added
+        // The official record is authoritative for its own dates, so a stored
+        // row it contradicts is replaced rather than kept beside it.
+        const merged = reconcileDraws(g.draws, outcome.draws)
+        result.added = merged.added
+        result.corrected = merged.corrected
         return { ...g, draws: merged.merged }
       })
-      const added = addedRef.n
-      if (added > 0) say(`${game.name}: ${added} new draw${added === 1 ? '' : 's'} added — model retrained.`)
-      else if (!silentWhenCurrent) say(`${game.name} is already up to date.`)
+      const { added, corrected } = result
+      // Quiet only when there is nothing to say: a source that is behind is
+      // reported even on the automatic refresh.
+      if (added > 0 || corrected.length || outcome.freshness.overdue.length || !silentWhenCurrent) {
+        say(syncMessage(game.name, added, corrected, outcome.freshness))
+      }
       void hydrateSales(gameId, game.syncKey)
     } catch (err) {
       say(`Sync failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -279,7 +285,10 @@ export default function App() {
       setGamesState((s) => ({ games: [...s.games, game], activeId: game.id }))
       setDialog('')
       void hydrateSales(game.id, key)
-      say(`${meta.name} set up — ${outcome.draws.length.toLocaleString()} official draws loaded.`)
+      const behind = outcome.freshness.overdue.length
+        ? ` ${syncMessage(meta.name, 0, [], outcome.freshness)}`
+        : ` Latest result ${outcome.freshness.latest}.`
+      say(`${meta.name} set up — ${outcome.draws.length.toLocaleString()} official draws loaded.${behind}`)
     } catch (err) {
       say(`Could not set up ${meta.name}: ${err instanceof Error ? err.message : String(err)}`)
     } finally {

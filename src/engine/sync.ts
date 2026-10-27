@@ -1,7 +1,8 @@
 import type { Draw } from './types.ts'
 import { parseDelimitedText, type ParseOutcome } from './parse.ts'
 import { decodeHistory, fetchPublishedHistory } from './history.ts'
-import { dowOf } from './dates.ts'
+import { dowOf, isoKey } from './dates.ts'
+import { overdueDrawings } from './rules.ts'
 
 /**
  * Official draw-result sources (NY Open Data / Socrata — CORS-enabled public
@@ -81,37 +82,105 @@ export function parseSocrataRows(rows: SocrataRow[], key: SyncKey): ParseOutcome
   }
 }
 
-/**
- * The deepest history available for a game.
- *
- * Prefers the merged file published alongside the app, which is the union of
- * every public source and reaches back to 1995 for Powerball and 2002 for Mega
- * Millions. The live New York API is the fallback: always current, but it only
- * begins in 2010 for Powerball.
- */
-export async function fetchOfficialResults(key: SyncKey): Promise<ParseOutcome> {
-  const published = await fetchPublishedHistory(key)
-  if (published) {
-    const draws = decodeHistory(published)
-    if (draws.length > 0) {
-      return {
-        draws,
-        errors: [],
-        warnings: [
-          `${draws.length.toLocaleString()} draws from ${draws[0].date} — every public source merged, with jackpots and winner locations where they exist.`,
-          'This reaches back through older rule eras. Settings › "Which draws to analyze" chooses whether the model reads all of it or only the current rules.',
-        ],
-        drawSize: draws[0].sorted.length,
-        hasSpecial: draws.some((d) => d.special !== undefined),
-      }
-    }
-  }
+/** How current a sync left the history, judged against the drawing schedule. */
+export interface Freshness {
+  /** Latest result any source supplied; '' when none did */
+  latest: string
+  /** Scheduled drawings past their day's grace that no source has a result for */
+  overdue: string[]
+  /** Where the rows came from, most trusted first */
+  sources: string[]
+}
 
+export type SyncOutcome = ParseOutcome & { freshness: Freshness }
+
+/** The device's own calendar date. */
+export const localToday = (now: Date = new Date()): string => isoKey(now.getFullYear(), now.getMonth() + 1, now.getDate())
+
+/**
+ * Combine the published history with the live API's rows, and say how current
+ * the result is. Pure, so it is tested without a network.
+ *
+ * The published file is the reconciled record and wins for every date it
+ * holds; the live rows only extend it past its last date. That matters when
+ * the file is behind — a build that failed, a source that went thin — because
+ * a sync that read only the file used to report "already up to date" while
+ * drawings were days old in the source of record.
+ */
+export function combineOfficial(key: SyncKey, published: Draw[], live: Draw[] | null, today: string): SyncOutcome {
+  const lastPublished = published.length ? published[published.length - 1].date : ''
+  const newer = live ? live.filter((d) => d.date > lastPublished) : []
+  const draws = newer.length ? [...published, ...newer] : published
+  const sources: string[] = []
+  if (published.length) sources.push('published history')
+  if (newer.length) sources.push('New York live results')
+  const latest = draws.length ? draws[draws.length - 1].date : ''
+  const warnings: string[] = []
+  if (published.length) {
+    warnings.push(`${draws.length.toLocaleString()} draws from ${draws[0].date} — every public source merged, with jackpots and winner locations where they exist.`)
+    warnings.push('This reaches back through older rule eras. Settings › "Which draws to analyze" chooses whether the model reads all of it or only the current rules.')
+  }
+  return {
+    draws,
+    errors: draws.length ? [] : ['The source returned no usable rows.'],
+    warnings,
+    drawSize: draws.length ? draws[0].sorted.length : 0,
+    hasSpecial: draws.some((d) => d.special !== undefined),
+    freshness: { latest, overdue: latest ? overdueDrawings(key, latest, today) : [], sources },
+  }
+}
+
+async function fetchLive(key: SyncKey): Promise<Draw[]> {
   const source = SYNC_SOURCES.find((s) => s.key === key)!
   const resp = await fetch(source.url, { headers: { Accept: 'application/json' } })
   if (!resp.ok) throw new Error(`${source.label} source responded ${resp.status}`)
-  const rows = (await resp.json()) as SocrataRow[]
-  return parseSocrataRows(rows, key)
+  return parseSocrataRows((await resp.json()) as SocrataRow[], key).draws
+}
+
+/**
+ * The deepest history available for a game, as current as any source has it.
+ *
+ * Prefers the merged file published alongside the app, which is the union of
+ * every public source and reaches back to 1995 for Powerball and 2002 for Mega
+ * Millions. When that file is missing, or a scheduled drawing is past its grace
+ * without a result in it, the live New York API is asked as well — it is always
+ * current, though it only begins in 2010 for Powerball.
+ */
+export async function fetchOfficialResults(key: SyncKey, today: string = localToday()): Promise<SyncOutcome> {
+  const file = await fetchPublishedHistory(key)
+  const published = file ? decodeHistory(file) : []
+  const lastPublished = published.length ? published[published.length - 1].date : ''
+  let live: Draw[] | null = null
+  if (!published.length || overdueDrawings(key, lastPublished, today).length > 0) {
+    try {
+      live = await fetchLive(key)
+    } catch (err) {
+      // With the file in hand a dead live API costs freshness, not the sync —
+      // and the freshness report below says exactly how much.
+      if (!published.length) throw err
+    }
+  }
+  return combineOfficial(key, published, live, today)
+}
+
+/**
+ * The toast after a sync. "Up to date" is only said when the schedule agrees:
+ * no drawing past its grace is missing a result.
+ */
+export function syncMessage(name: string, added: number, corrected: string[], freshness: Freshness): string {
+  const parts: string[] = []
+  if (added > 0) parts.push(`${name}: ${added} new draw${added === 1 ? '' : 's'} added — model retrained.`)
+  if (corrected.length) {
+    parts.push(`Replaced ${corrected.length} stored result${corrected.length === 1 ? '' : 's'} the official record contradicts (${corrected.slice(0, 3).join(', ')}${corrected.length > 3 ? ', …' : ''}).`)
+  }
+  const { overdue, latest } = freshness
+  if (overdue.length) {
+    const list = overdue.slice(-3).join(', ')
+    parts.push(`${added > 0 || corrected.length ? 'Still' : `${name}:`} behind — ${overdue.length} scheduled drawing${overdue.length === 1 ? '' : 's'} since ${latest} ${overdue.length === 1 ? 'has' : 'have'} no published result yet (${list}). Try again later.`)
+  } else if (added === 0 && !corrected.length) {
+    parts.push(`${name} is up to date — latest result ${latest}.`)
+  }
+  return parts.join(' ')
 }
 
 /**
